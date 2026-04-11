@@ -35,15 +35,21 @@ def get_engine(database_url: str = None):
         database_url = DATABASE_URL
 
     connect_args = {}
+    engine_kwargs = {"echo": False}
+
     if database_url.startswith("sqlite"):
-        # SQLite needs check_same_thread=False when used from multiple threads
-        # (APScheduler runs pipeline in a background thread)
         connect_args["check_same_thread"] = False
+        if database_url == "sqlite://":
+            # In-memory SQLite: use StaticPool so every get_session() call
+            # shares the same connection (and therefore the same database).
+            # Without this, each new connection gets a fresh empty database.
+            from sqlalchemy.pool import StaticPool
+            engine_kwargs["poolclass"] = StaticPool
 
     _engine = create_engine(
         database_url,
         connect_args=connect_args,
-        echo=False,
+        **engine_kwargs,
     )
 
     # WAL mode + busy timeout — applied to every new SQLite connection
@@ -55,7 +61,7 @@ def get_engine(database_url: str = None):
             cursor.execute("PRAGMA busy_timeout=10000")
             cursor.close()
 
-    _SessionFactory = sessionmaker(bind=_engine)
+    _SessionFactory = sessionmaker(bind=_engine, expire_on_commit=False)
     logger.debug("Database engine created: %s", database_url)
     return _engine
 
