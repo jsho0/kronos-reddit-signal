@@ -1,0 +1,94 @@
+"""
+Database engine setup.
+
+- WAL mode enabled via connection event hook (SQLite only, no-op on other DBs)
+- busy_timeout=10000ms prevents "database is locked" errors under concurrent access
+- get_session() is a context manager that commits on success, rolls back on error
+"""
+import logging
+from contextlib import contextmanager
+
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.orm import Session, sessionmaker
+
+from storage.models import Base
+
+logger = logging.getLogger(__name__)
+
+_engine = None
+_SessionFactory = None
+
+
+def get_engine(database_url: str = None):
+    """
+    Return the module-level engine, creating it if needed.
+    Passing database_url on first call sets the URL for the process lifetime.
+    Subsequent calls ignore database_url (cached engine is returned).
+    """
+    global _engine, _SessionFactory
+
+    if _engine is not None:
+        return _engine
+
+    if database_url is None:
+        from config import DATABASE_URL
+        database_url = DATABASE_URL
+
+    connect_args = {}
+    if database_url.startswith("sqlite"):
+        # SQLite needs check_same_thread=False when used from multiple threads
+        # (APScheduler runs pipeline in a background thread)
+        connect_args["check_same_thread"] = False
+
+    _engine = create_engine(
+        database_url,
+        connect_args=connect_args,
+        echo=False,
+    )
+
+    # WAL mode + busy timeout — applied to every new SQLite connection
+    if database_url.startswith("sqlite"):
+        @event.listens_for(_engine, "connect")
+        def _set_sqlite_pragmas(dbapi_conn, _connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=10000")
+            cursor.close()
+
+    _SessionFactory = sessionmaker(bind=_engine)
+    logger.debug("Database engine created: %s", database_url)
+    return _engine
+
+
+def init_db(database_url: str = None):
+    """
+    Create all tables if they don't exist. Safe to call repeatedly (CREATE IF NOT EXISTS).
+    Call this once at application startup.
+    """
+    engine = get_engine(database_url)
+    Base.metadata.create_all(engine)
+    logger.info("Database tables initialized")
+
+
+@contextmanager
+def get_session(database_url: str = None) -> Session:
+    """
+    Context manager that yields a SQLAlchemy Session.
+    Commits on clean exit, rolls back on exception.
+
+    Usage:
+        with get_session() as session:
+            session.add(some_model)
+    """
+    if _SessionFactory is None:
+        get_engine(database_url)
+
+    session = _SessionFactory()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
