@@ -35,10 +35,10 @@ WEIGHT_TECHNICALS = 0.25
 
 # Label thresholds
 LABEL_THRESHOLDS = [
-    (0.72, "STRONG_BUY"),
-    (0.58, "BUY"),
-    (0.42, "HOLD"),
-    (0.28, "SELL"),
+    (0.68, "STRONG_BUY"),
+    (0.54, "BUY"),
+    (0.46, "HOLD"),
+    (0.32, "SELL"),
     (0.00, "STRONG_SELL"),
 ]
 
