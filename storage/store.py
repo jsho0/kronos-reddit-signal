@@ -404,6 +404,15 @@ class SignalStore:
             session.expunge_all()
             return rows
 
+    def get_rotating_experiments(self) -> list[Experiment]:
+        """Return all experiments with status='rotating' (benched, awaiting more data)."""
+        with get_session() as session:
+            rows = session.execute(
+                select(Experiment).where(Experiment.status == "rotating")
+            ).scalars().all()
+            session.expunge_all()
+            return rows
+
     def update_experiment(self, experiment_id: int, data: dict):
         """Partial update an experiment row by id."""
         from sqlalchemy import update as sa_update

@@ -2,17 +2,22 @@
 Meta runner: orchestrates the full ASI-Evolve style cycle.
 
 Weekly cycle (runs Sunday night):
-  1. Analyze any active experiments that have reached MIN_ACTIVE_DAYS
-  2. Activate any proposed experiments (set status → active, record accuracy_before)
-  3. If no pending experiments exist → call Researcher to propose a new one
-  4. Run weight optimizer: nudge Kronos/Reddit/Technicals weights based on accuracy
+  1. Re-check any rotating experiments that now have enough signals for a confident decision
+  2. Analyze any active experiments that have reached MIN_ACTIVE_DAYS
+  3. Activate any proposed experiments
+  4. If no pending experiments → call Researcher to propose a new one
 
-Designed to be called from the APScheduler alongside the daily pipeline.
+Experiment statuses:
+  proposed  → waiting to be activated
+  active    → running, being evaluated weekly
+  rotating  → benched (early negative signal), data preserved, awaiting more signals
+  completed → kept permanently (accuracy held or improved)
+  archived  → disabled permanently (confident it hurt accuracy)
 """
 import logging
 from datetime import datetime, timezone
 
-from meta.analyzer import analyze_experiment
+from meta.analyzer import analyze_experiment, recheck_rotating
 from meta.researcher import propose
 from storage.db import init_db
 from storage.store import SignalStore
@@ -29,16 +34,25 @@ class MetaRunner:
         logger.info("meta: starting weekly cycle")
         t0 = datetime.now(timezone.utc)
 
-        # Step 1: analyze any mature active experiments
+        # Step 1: re-check rotating experiments — maybe they have enough data now
+        rotating = self.store.get_rotating_experiments()
+        rechecked = 0
+        for exp in rotating:
+            if recheck_rotating(exp, self.store):
+                rechecked += 1
+        if rechecked:
+            logger.info("meta: made confident decisions on %d rotating experiment(s)", rechecked)
+
+        # Step 2: analyze active experiments
         active = self.store.get_active_experiments()
         analyzed = 0
         for exp in active:
             if analyze_experiment(exp, self.store):
                 analyzed += 1
         if analyzed:
-            logger.info("meta: analyzed %d experiments", analyzed)
+            logger.info("meta: analyzed %d active experiment(s)", analyzed)
 
-        # Step 2: activate any proposed experiments
+        # Step 3: activate proposed experiments
         pending = self.store.get_pending_experiments()
         for exp in pending:
             acc, n = _current_accuracy(self.store)
@@ -50,10 +64,10 @@ class MetaRunner:
             })
             logger.info("meta: activated experiment '%s'", exp.source_name)
 
-        # Step 3: propose new source if nothing pending
+        # Step 4: propose new source if nothing pending
         still_pending = self.store.get_pending_experiments()
         if not still_pending:
-            logger.info("meta: no pending experiments, asking Researcher for new proposal...")
+            logger.info("meta: no pending experiments — asking Researcher for new proposal...")
             proposal = propose(self.store)
             if proposal:
                 exp_id = self.store.create_experiment(proposal)
@@ -61,10 +75,16 @@ class MetaRunner:
             else:
                 logger.warning("meta: Researcher returned no proposal")
         else:
-            logger.info("meta: %d experiment(s) pending activation, skipping new proposal", len(still_pending))
+            logger.info(
+                "meta: %d experiment(s) pending activation, skipping new proposal",
+                len(still_pending),
+            )
 
         duration = (datetime.now(timezone.utc) - t0).total_seconds()
-        logger.info("meta: weekly cycle complete in %.1fs", duration)
+        logger.info(
+            "meta: weekly cycle complete in %.1fs (rotated=%d analyzed=%d)",
+            duration, rechecked, analyzed,
+        )
 
 
 def _current_accuracy(store) -> tuple[float | None, int]:

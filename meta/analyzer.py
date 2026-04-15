@@ -1,19 +1,28 @@
 """
-Analyzer agent: evaluates completed experiments and distills lessons.
+Analyzer agent: evaluates experiments and distills lessons.
 
-After a data source has been active for MIN_ACTIVE_DAYS, the Analyzer:
-  1. Compares accuracy before vs after activation
-  2. Calls Claude to write a 1-2 sentence lesson
-  3. Stores the lesson in the cognition store
-  4. Marks the experiment as "completed"
+Decision logic based on signal count:
 
-If accuracy improved → keep the module (ENABLED stays True)
-If accuracy dropped → set ENABLED = False in the module, archive experiment
+  n_after < MIN_CONFIDENT_SIGNALS (30):
+    - Accuracy dropped → ROTATE: disable temporarily, preserve data, bench it
+    - Accuracy flat/up  → keep running, check again next week
+
+  n_after >= MIN_CONFIDENT_SIGNALS:
+    - Accuracy dropped → ARCHIVE: permanently disable, lesson written
+    - Accuracy flat/up  → COMPLETE: keep enabled, lesson written
+
+"Rotating" means: benched while we try something new, but not dead.
+The runner re-evaluates rotating experiments once their signal count
+crosses MIN_CONFIDENT_SIGNALS.
+
+Status lifecycle:
+  proposed → active → rotating → active (re-evaluated) → completed | archived
+                               → completed | archived   (if confident)
 """
 import logging
 import os
 import re
-from datetime import date, datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import anthropic
@@ -22,7 +31,9 @@ from meta.cognition import add_lesson
 
 logger = logging.getLogger(__name__)
 
-MIN_ACTIVE_DAYS = 7   # how long a source must run before evaluation
+MIN_ACTIVE_DAYS = 7          # days before first evaluation
+MIN_CONFIDENT_SIGNALS = 30   # signals needed before permanent keep/kill decision
+
 DATA_SOURCES_DIR = Path(__file__).parent.parent / "data_sources"
 
 ANALYZER_PROMPT = """You are analyzing the performance of a new data source added to a stock signal system.
@@ -36,6 +47,7 @@ Description: {description}
 ## Accuracy After Activation
 {n_after} signals evaluated. Directional accuracy: {acc_after}
 Accuracy delta: {delta:+.1%}
+Confidence: {confidence}
 
 ## Task
 Write ONE concise sentence (max 25 words) that captures what this experiment taught us.
@@ -95,20 +107,56 @@ def _call_claude(prompt: str) -> str | None:
 
 
 def _disable_source(source_name: str):
-    """Set ENABLED = False in the module file."""
+    """Set ENABLED = False in the module file (reversible)."""
     path = DATA_SOURCES_DIR / f"{source_name}.py"
     if not path.exists():
         return
     code = path.read_text(encoding="utf-8")
     updated = re.sub(r"^ENABLED\s*=\s*True", "ENABLED = False", code, flags=re.MULTILINE)
     path.write_text(updated, encoding="utf-8")
-    logger.info("analyzer: disabled %s (accuracy dropped)", source_name)
+    logger.info("analyzer: disabled %s", source_name)
+
+
+def _enable_source(source_name: str):
+    """Set ENABLED = True in the module file."""
+    path = DATA_SOURCES_DIR / f"{source_name}.py"
+    if not path.exists():
+        return
+    code = path.read_text(encoding="utf-8")
+    updated = re.sub(r"^ENABLED\s*=\s*False", "ENABLED = True", code, flags=re.MULTILINE)
+    path.write_text(updated, encoding="utf-8")
+    logger.info("analyzer: re-enabled %s", source_name)
+
+
+def _write_lesson(experiment, acc_before, n_before, acc_after, n_after, delta, confident, days_active):
+    confidence_str = f"confident ({n_after} signals)" if confident else f"preliminary ({n_after} signals, need {MIN_CONFIDENT_SIGNALS})"
+    prompt = ANALYZER_PROMPT.format(
+        source_name=experiment.source_name,
+        description=experiment.description or "No description",
+        n_before=n_before,
+        acc_before=f"{acc_before:.1%}" if acc_before is not None else "unknown",
+        n_after=n_after,
+        acc_after=f"{acc_after:.1%}" if acc_after is not None else "unknown",
+        delta=delta,
+        confidence=confidence_str,
+    )
+    lesson_text = _call_claude(prompt) or (
+        f"{experiment.source_name}: accuracy {delta:+.1%} over {n_after} signals ({confidence_str})."
+    )
+    add_lesson(
+        source_name=experiment.source_name,
+        title=f"{experiment.source_name} ({days_active}d, {'confident' if confident else 'preliminary'})",
+        lesson=lesson_text,
+        accuracy_delta=delta,
+    )
+    return lesson_text
 
 
 def analyze_experiment(experiment, store) -> bool:
     """
     Evaluate a single active experiment.
-    Returns True if the experiment was completed, False if not ready yet.
+    Returns True if action was taken (rotated, completed, or archived).
+    Returns False if not ready yet or no action needed.
     """
     if not experiment.activated_at:
         return False
@@ -118,68 +166,113 @@ def analyze_experiment(experiment, store) -> bool:
 
     if days_active < MIN_ACTIVE_DAYS:
         logger.debug(
-            "analyzer: %s only active %d/%d days, skipping",
+            "analyzer: %s only %d/%d days active, skipping",
             experiment.source_name, days_active, MIN_ACTIVE_DAYS,
         )
         return False
 
-    # Accuracy before: 30 days before activation
     before_date = (activated - timedelta(days=30)).strftime("%Y-%m-%d")
     activation_date = activated.strftime("%Y-%m-%d")
     acc_before, n_before = _get_accuracy_for_period(store, before_date)
-
-    # Accuracy after: since activation
     acc_after, n_after = _get_accuracy_for_period(store, activation_date)
 
     if n_after < 5:
-        logger.info("analyzer: %s has only %d post-activation signals, waiting", experiment.source_name, n_after)
+        logger.info("analyzer: %s only %d post-activation signals, waiting", experiment.source_name, n_after)
         return False
 
     delta = (acc_after or 0.0) - (acc_before or 0.0)
+    confident = n_after >= MIN_CONFIDENT_SIGNALS
+    negative = delta < -0.02
 
-    # Ask Claude for a lesson
-    prompt = ANALYZER_PROMPT.format(
-        source_name=experiment.source_name,
-        description=experiment.description or "No description",
-        n_before=n_before,
-        acc_before=f"{acc_before:.1%}" if acc_before is not None else "unknown",
-        n_after=n_after,
-        acc_after=f"{acc_after:.1%}" if acc_after is not None else "unknown",
-        delta=delta,
-    )
-    lesson_text = _call_claude(prompt) or (
-        f"Added {experiment.source_name}: accuracy changed by {delta:+.1%} over {n_after} signals."
-    )
+    if not confident and not negative:
+        # Looking good so far, not enough data — let it keep running
+        logger.debug("analyzer: %s positive/neutral so far (%d signals), continuing", experiment.source_name, n_after)
+        return False
 
-    # Store lesson
-    add_lesson(
-        source_name=experiment.source_name,
-        title=f"{experiment.source_name} experiment ({days_active}d)",
-        lesson=lesson_text,
-        accuracy_delta=delta,
-    )
+    # Write a lesson regardless of outcome
+    lesson_text = _write_lesson(experiment, acc_before, n_before, acc_after, n_after, delta, confident, days_active)
 
-    # If accuracy dropped meaningfully, disable the source
-    keep = acc_before is None or delta >= -0.02
-    if not keep:
+    if confident:
+        # Enough data — make permanent decision
+        if negative:
+            _disable_source(experiment.source_name)
+            final_status = "archived"
+            outcome = "archived (confident, accuracy dropped)"
+        else:
+            final_status = "completed"
+            outcome = "completed (confident, accuracy held)"
+
+        store.update_experiment(experiment.id, {
+            "status": final_status,
+            "accuracy_before": acc_before,
+            "accuracy_after": acc_after,
+            "n_signals_before": n_before,
+            "n_signals_after": n_after,
+            "lesson": lesson_text,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
+    else:
+        # Not enough data but early signs are negative — rotate out, try something new
         _disable_source(experiment.source_name)
+        store.update_experiment(experiment.id, {
+            "status": "rotating",
+            "accuracy_before": acc_before,
+            "accuracy_after": acc_after,
+            "n_signals_before": n_before,
+            "n_signals_after": n_after,
+            "lesson": lesson_text,
+        })
+        outcome = f"rotating (preliminary, {n_after}/{MIN_CONFIDENT_SIGNALS} signals, delta {delta:+.1%})"
 
-    # Mark experiment complete
+    logger.info("analyzer: %s → %s", experiment.source_name, outcome)
+    return True
+
+
+def recheck_rotating(experiment, store) -> bool:
+    """
+    Re-evaluate a rotating experiment once it has accumulated enough signals.
+    If confident now, make permanent decision. Otherwise leave it rotating.
+    Returns True if a permanent decision was made.
+    """
+    if not experiment.activated_at:
+        return False
+
+    activated = datetime.fromisoformat(experiment.activated_at.replace("Z", "+00:00"))
+    activation_date = activated.strftime("%Y-%m-%d")
+    acc_after, n_after = _get_accuracy_for_period(store, activation_date)
+
+    if n_after < MIN_CONFIDENT_SIGNALS:
+        logger.debug(
+            "analyzer: rotating %s still only %d/%d signals, waiting",
+            experiment.source_name, n_after, MIN_CONFIDENT_SIGNALS,
+        )
+        return False
+
+    # We now have enough data — make the permanent call
+    acc_before = experiment.accuracy_before or 0.0
+    delta = (acc_after or 0.0) - acc_before
+    days_active = (datetime.now(timezone.utc) - activated).days
+
+    lesson_text = _write_lesson(experiment, acc_before, experiment.n_signals_before or 0,
+                                acc_after, n_after, delta, confident=True, days_active=days_active)
+
+    if delta < -0.02:
+        # Confirmed bad — leave disabled, archive
+        final_status = "archived"
+        outcome = f"archived (confirmed after {n_after} signals)"
+    else:
+        # Actually fine — re-enable and complete
+        _enable_source(experiment.source_name)
+        final_status = "completed"
+        outcome = f"completed (recovered after {n_after} signals, delta {delta:+.1%})"
+
     store.update_experiment(experiment.id, {
-        "status": "completed" if keep else "archived",
-        "accuracy_before": acc_before,
+        "status": final_status,
         "accuracy_after": acc_after,
-        "n_signals_before": n_before,
         "n_signals_after": n_after,
         "lesson": lesson_text,
         "completed_at": datetime.now(timezone.utc).isoformat(),
     })
 
-    logger.info(
-        "analyzer: %s → %s (delta %+.1%%, lesson: %s)",
-        experiment.source_name,
-        "kept" if keep else "disabled",
-        delta * 100,
-        lesson_text[:60],
-    )
+    logger.info("analyzer: rotating %s → %s", experiment.source_name, outcome)
     return True
