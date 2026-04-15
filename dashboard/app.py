@@ -14,12 +14,11 @@ Sections:
 import sys
 from pathlib import Path
 
-# Ensure project root is on sys.path when run via `streamlit run dashboard/app.py`
 ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import config  # loads .env and injects kronos_src into sys.path
+import config
 
 import pandas as pd
 import plotly.express as px
@@ -33,10 +32,199 @@ from storage.store import SignalStore
 # ------------------------------------------------------------------ #
 
 st.set_page_config(
-    page_title="Kronos Signal Dashboard",
-    page_icon="📈",
+    page_title="Kronos Signal",
+    page_icon="K",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+# ------------------------------------------------------------------ #
+#  Design system injection                                             #
+# ------------------------------------------------------------------ #
+
+COLORS = {
+    "bg":          "#020617",
+    "surface":     "#0F172A",
+    "surface2":    "#1E293B",
+    "border":      "#334155",
+    "muted":       "#475569",
+    "text":        "#F8FAFC",
+    "text_muted":  "#94A3B8",
+    "green":       "#22C55E",
+    "green_dim":   "#86EFAC",
+    "amber":       "#FCD34D",
+    "orange":      "#F97316",
+    "red":         "#EF4444",
+    "blue":        "#38BDF8",
+}
+
+st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+html, body, [class*="css"] {{
+    font-family: 'Inter', sans-serif;
+}}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {{
+    background: {COLORS['surface']} !important;
+    border-right: 1px solid {COLORS['border']};
+}}
+section[data-testid="stSidebar"] .stMarkdown p {{
+    color: {COLORS['text_muted']};
+    font-size: 0.78rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {{
+    background: {COLORS['surface']} !important;
+    border-bottom: 1px solid {COLORS['border']};
+    gap: 4px;
+    padding: 4px 4px 0;
+    border-radius: 8px 8px 0 0;
+}}
+.stTabs [data-baseweb="tab"] {{
+    background: transparent !important;
+    color: {COLORS['text_muted']} !important;
+    border-radius: 6px 6px 0 0;
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 8px 16px;
+    border: none !important;
+    transition: color 150ms ease;
+}}
+.stTabs [aria-selected="true"] {{
+    background: {COLORS['bg']} !important;
+    color: {COLORS['text']} !important;
+    border-bottom: 2px solid {COLORS['green']} !important;
+}}
+.stTabs [data-baseweb="tab-panel"] {{
+    padding-top: 24px;
+}}
+
+/* Metric cards */
+[data-testid="metric-container"] {{
+    background: {COLORS['surface']} !important;
+    border: 1px solid {COLORS['border']};
+    border-radius: 10px;
+    padding: 16px 20px !important;
+}}
+[data-testid="metric-container"] label {{
+    color: {COLORS['text_muted']} !important;
+    font-size: 0.75rem !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+}}
+[data-testid="metric-container"] [data-testid="stMetricValue"] {{
+    color: {COLORS['text']} !important;
+    font-size: 1.6rem !important;
+    font-weight: 600 !important;
+    line-height: 1.2 !important;
+}}
+[data-testid="metric-container"] [data-testid="stMetricDelta"] {{
+    font-size: 0.8rem !important;
+}}
+
+/* Dataframes */
+[data-testid="stDataFrame"] {{
+    border: 1px solid {COLORS['border']};
+    border-radius: 10px;
+    overflow: hidden;
+}}
+
+/* Buttons */
+.stButton button {{
+    background: {COLORS['surface2']} !important;
+    color: {COLORS['text']} !important;
+    border: 1px solid {COLORS['border']} !important;
+    border-radius: 8px !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    font-size: 0.85rem !important;
+    transition: border-color 150ms ease, background 150ms ease !important;
+}}
+.stButton button:hover {{
+    border-color: {COLORS['green']} !important;
+    background: {COLORS['surface']} !important;
+}}
+
+/* Dividers */
+hr {{
+    border-color: {COLORS['border']} !important;
+    margin: 20px 0 !important;
+}}
+
+/* Section headers */
+h2 {{
+    font-size: 1.1rem !important;
+    font-weight: 600 !important;
+    color: {COLORS['text']} !important;
+    letter-spacing: -0.01em !important;
+    margin-bottom: 16px !important;
+}}
+h3 {{
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    color: {COLORS['text_muted']} !important;
+    letter-spacing: 0.05em !important;
+    text-transform: uppercase !important;
+    margin-bottom: 12px !important;
+}}
+
+/* Info/warning/error boxes */
+[data-testid="stAlert"] {{
+    border-radius: 8px !important;
+    border: 1px solid {COLORS['border']} !important;
+    font-size: 0.85rem !important;
+}}
+
+/* Expander */
+[data-testid="stExpander"] {{
+    border: 1px solid {COLORS['border']} !important;
+    border-radius: 8px !important;
+    background: {COLORS['surface']} !important;
+}}
+
+/* Sliders */
+[data-testid="stSlider"] label {{
+    font-size: 0.8rem !important;
+    color: {COLORS['text_muted']} !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+}}
+
+/* Selectbox / multiselect */
+[data-testid="stMultiSelect"] label,
+[data-testid="stSelectbox"] label {{
+    font-size: 0.8rem !important;
+    color: {COLORS['text_muted']} !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+}}
+
+/* Code blocks in sidebar */
+code {{
+    font-size: 0.78rem !important;
+    background: {COLORS['surface2']} !important;
+    color: {COLORS['green']} !important;
+    border-radius: 4px !important;
+    padding: 2px 6px !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+
+# Shared plotly layout defaults
+PLOTLY_LAYOUT = dict(
+    paper_bgcolor=COLORS["surface"],
+    plot_bgcolor=COLORS["bg"],
+    font=dict(family="Inter, sans-serif", color=COLORS["text"]),
+    margin=dict(t=40, b=20, l=16, r=16),
+    xaxis=dict(gridcolor=COLORS["border"], zerolinecolor=COLORS["border"]),
+    yaxis=dict(gridcolor=COLORS["border"], zerolinecolor=COLORS["border"]),
 )
 
 # ------------------------------------------------------------------ #
@@ -50,23 +238,42 @@ def get_store() -> SignalStore:
 
 
 LABEL_COLORS = {
-    "STRONG_BUY":  "#00c853",
-    "BUY":         "#69f0ae",
-    "HOLD":        "#ffd740",
-    "SELL":        "#ff6d00",
-    "STRONG_SELL": "#d50000",
+    "STRONG_BUY":  COLORS["green"],
+    "BUY":         COLORS["green_dim"],
+    "HOLD":        COLORS["amber"],
+    "SELL":        COLORS["orange"],
+    "STRONG_SELL": COLORS["red"],
+}
+
+LABEL_TEXT_COLORS = {
+    "STRONG_BUY":  "#000",
+    "BUY":         "#000",
+    "HOLD":        "#000",
+    "SELL":        "#000",
+    "STRONG_SELL": "#fff",
 }
 
 LABEL_ORDER = ["STRONG_BUY", "BUY", "HOLD", "SELL", "STRONG_SELL"]
 
 
 def label_badge(label: str) -> str:
-    color = LABEL_COLORS.get(label, "#888888")
-    return f'<span style="background:{color};color:#000;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:0.85em">{label}</span>'
+    bg = LABEL_COLORS.get(label, COLORS["muted"])
+    fg = LABEL_TEXT_COLORS.get(label, "#fff")
+    return (
+        f'<span style="background:{bg};color:{fg};padding:3px 10px;border-radius:5px;'
+        f'font-weight:600;font-size:0.78rem;letter-spacing:0.04em">{label}</span>'
+    )
+
+
+def card(content_html: str) -> str:
+    return (
+        f'<div style="background:{COLORS["surface"]};border:1px solid {COLORS["border"]};'
+        f'border-radius:10px;padding:16px 20px;margin-bottom:8px">{content_html}</div>'
+    )
 
 
 # ------------------------------------------------------------------ #
-#  Data loaders (cached per run)                                      #
+#  Data loaders                                                        #
 # ------------------------------------------------------------------ #
 
 @st.cache_data(ttl=300)
@@ -136,14 +343,19 @@ def load_accuracy() -> dict:
 # ------------------------------------------------------------------ #
 
 with st.sidebar:
-    st.title("Kronos Signal")
-    st.caption("Kronos + Reddit confluence engine")
+    st.markdown(
+        f'<div style="font-size:1.25rem;font-weight:700;color:{COLORS["text"]};'
+        f'letter-spacing:-0.02em;margin-bottom:2px">Kronos Signal</div>'
+        f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};margin-bottom:16px">'
+        f'Kronos + Reddit confluence engine</div>',
+        unsafe_allow_html=True,
+    )
     st.divider()
 
     lookback_days = st.slider("Lookback (days)", min_value=1, max_value=90, value=30)
     st.divider()
 
-    if st.button("Refresh data"):
+    if st.button("Refresh data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -156,12 +368,24 @@ with st.sidebar:
             f"{accuracy['correct']}/{accuracy['total']} signals",
         )
     else:
-        st.caption("No accuracy data yet (need price_next_day backfill)")
+        st.markdown(
+            f'<span style="font-size:0.78rem;color:{COLORS["text_muted"]}">'
+            f'No accuracy data yet</span>',
+            unsafe_allow_html=True,
+        )
 
     st.divider()
-    st.caption("Run pipeline:")
+    st.markdown(
+        f'<span style="font-size:0.75rem;color:{COLORS["text_muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.05em">Run pipeline</span>',
+        unsafe_allow_html=True,
+    )
     st.code("python main.py --once", language="bash")
-    st.caption("Start scheduler:")
+    st.markdown(
+        f'<span style="font-size:0.75rem;color:{COLORS["text_muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.05em">Scheduler</span>',
+        unsafe_allow_html=True,
+    )
     st.code("python main.py --schedule", language="bash")
 
 
@@ -172,11 +396,11 @@ with st.sidebar:
 df = load_signals(days=lookback_days)
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Signal Table",
-    "🔍 Ticker Detail",
-    "⚙️ Pipeline Health",
-    "🎯 Accuracy",
-    "💸 Paper Trading",
+    "Signal Table",
+    "Ticker Detail",
+    "Pipeline Health",
+    "Accuracy",
+    "Paper Trading",
 ])
 
 # ================================================================== #
@@ -187,9 +411,8 @@ with tab1:
     st.header("Signal Table")
 
     if df.empty:
-        st.info("No signals yet. Run the pipeline first: `python main.py --once`")
+        st.info("No signals yet. Run the pipeline: `python main.py --once`")
     else:
-        # Filter controls
         col1, col2, col3 = st.columns(3)
         with col1:
             label_filter = st.multiselect(
@@ -212,25 +435,17 @@ with tab1:
             (df["confluence"] >= min_confluence)
         ].copy()
 
-        # Summary metrics
         today_str = pd.Timestamp.today().strftime("%Y-%m-%d")
         today_df = filtered[filtered["date"] == today_str]
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total signals", len(filtered))
         m2.metric("Today's signals", len(today_df))
-        m3.metric(
-            "Strong buys today",
-            len(today_df[today_df["label"] == "STRONG_BUY"])
-        )
-        m4.metric(
-            "Strong sells today",
-            len(today_df[today_df["label"] == "STRONG_SELL"])
-        )
+        m3.metric("Strong buys today", len(today_df[today_df["label"] == "STRONG_BUY"]))
+        m4.metric("Strong sells today", len(today_df[today_df["label"] == "STRONG_SELL"]))
 
         st.divider()
 
-        # Label distribution bar chart
         if not filtered.empty:
             label_counts = (
                 filtered.groupby(["date", "label"])
@@ -245,12 +460,22 @@ with tab1:
                 color_discrete_map=LABEL_COLORS,
                 category_orders={"label": LABEL_ORDER},
                 title="Signal labels over time",
-                height=300,
+                height=260,
             )
-            fig.update_layout(margin=dict(t=40, b=0))
+            fig.update_layout(
+                **PLOTLY_LAYOUT,
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom", y=1.02,
+                    xanchor="right", x=1,
+                    font=dict(size=11),
+                ),
+                bargap=0.15,
+            )
+            fig.update_traces(marker_line_width=0)
             st.plotly_chart(fig, use_container_width=True)
 
-        # Signal table
         display_cols = ["date", "ticker", "label", "confluence", "direction",
                         "kronos_conf", "reddit_sentiment", "rsi", "reddit_posts"]
         display_df = filtered[display_cols].copy()
@@ -261,7 +486,7 @@ with tab1:
         st.dataframe(
             display_df.sort_values(["date", "confluence"], ascending=[False, False]),
             use_container_width=True,
-            height=400,
+            height=380,
             column_config={
                 "confluence": st.column_config.ProgressColumn(
                     "Confluence", min_value=0, max_value=1, format="%.3f"
@@ -285,7 +510,6 @@ with tab2:
     else:
         tickers = sorted(df["ticker"].unique().tolist())
         selected_ticker = st.selectbox("Select ticker", tickers)
-
         ticker_df = df[df["ticker"] == selected_ticker].sort_values("date", ascending=False)
 
         if ticker_df.empty:
@@ -293,16 +517,21 @@ with tab2:
         else:
             latest = ticker_df.iloc[0]
 
-            # Header row
-            col_label, col_conf, col_dir = st.columns(3)
-            with col_label:
-                color = LABEL_COLORS.get(latest["label"], "#888")
-                st.markdown(
-                    f"<div style='background:{color};padding:12px;border-radius:8px;"
-                    f"text-align:center;font-size:1.4em;font-weight:bold'>"
-                    f"{latest['label']}</div>",
-                    unsafe_allow_html=True,
-                )
+            # Signal banner
+            color = LABEL_COLORS.get(latest["label"], COLORS["muted"])
+            text_color = LABEL_TEXT_COLORS.get(latest["label"], "#fff")
+            st.markdown(
+                f'<div style="background:{color};color:{text_color};padding:14px 20px;'
+                f'border-radius:10px;display:flex;align-items:center;justify-content:space-between;'
+                f'margin-bottom:20px">'
+                f'<span style="font-size:1.3rem;font-weight:700;letter-spacing:0.02em">'
+                f'{latest["label"]}</span>'
+                f'<span style="font-size:0.85rem;opacity:0.75">{selected_ticker} &middot; {latest["date"]}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            col_conf, col_dir, col_price = st.columns(3)
             with col_conf:
                 st.metric("Confluence score", f"{latest['confluence']:.3f}")
             with col_dir:
@@ -311,10 +540,14 @@ with tab2:
                     latest["direction"] or "—",
                     f"{(latest['kronos_pct'] or 0)*100:+.1f}% predicted",
                 )
+            with col_price:
+                st.metric(
+                    "Price at signal",
+                    f"${latest['price_at_signal']:,.2f}" if latest["price_at_signal"] else "—",
+                )
 
             st.divider()
 
-            # Three columns: Kronos / Reddit / Technicals
             c1, c2, c3 = st.columns(3)
 
             with c1:
@@ -336,15 +569,22 @@ with tab2:
                 st.metric("ADX", f"{latest['adx']:.1f}" if latest['adx'] else "—")
                 st.metric("Vol ratio", f"{latest['vol_ratio']:.2f}x" if latest['vol_ratio'] else "—")
 
-            # Reasoning
             if latest["reasoning"]:
                 st.divider()
                 st.subheader("Reasoning")
-                for line in str(latest["reasoning"]).split("\n"):
-                    if line.strip():
-                        st.markdown(f"- {line.strip()}")
+                lines = [l.strip() for l in str(latest["reasoning"]).split("\n") if l.strip()]
+                bullets_html = "".join(
+                    f'<div style="display:flex;gap:8px;margin-bottom:6px;font-size:0.85rem;'
+                    f'color:{COLORS["text_muted"]}">'
+                    f'<span style="color:{COLORS["green"]};flex-shrink:0">&#8250;</span>'
+                    f'<span>{line}</span></div>'
+                    for line in lines
+                )
+                st.markdown(
+                    card(bullets_html),
+                    unsafe_allow_html=True,
+                )
 
-            # Confluence history chart
             if len(ticker_df) > 1:
                 st.divider()
                 st.subheader("Confluence history")
@@ -354,22 +594,31 @@ with tab2:
                     y=ticker_df["confluence"],
                     mode="lines+markers",
                     name="Confluence",
-                    line=dict(color="#4fc3f7", width=2),
-                    marker=dict(size=6),
+                    line=dict(color=COLORS["blue"], width=2),
+                    marker=dict(size=5, color=COLORS["blue"]),
+                    fill="tozeroy",
+                    fillcolor=f'{COLORS["blue"]}18',
                 ))
-                hist_fig.add_hline(y=0.72, line_dash="dot", line_color="#00c853",
-                                   annotation_text="STRONG_BUY")
-                hist_fig.add_hline(y=0.58, line_dash="dot", line_color="#69f0ae",
-                                   annotation_text="BUY")
-                hist_fig.add_hline(y=0.42, line_dash="dot", line_color="#ff6d00",
-                                   annotation_text="SELL")
-                hist_fig.add_hline(y=0.28, line_dash="dot", line_color="#d50000",
-                                   annotation_text="STRONG_SELL")
+                # Threshold lines matching current thresholds
+                for y, color, label in [
+                    (0.68, COLORS["green"],      "STRONG BUY"),
+                    (0.54, COLORS["green_dim"],  "BUY"),
+                    (0.46, COLORS["orange"],     "SELL"),
+                    (0.32, COLORS["red"],        "STRONG SELL"),
+                ]:
+                    hist_fig.add_hline(
+                        y=y, line_dash="dot", line_color=color, line_width=1,
+                        annotation_text=label,
+                        annotation_font=dict(size=10, color=color),
+                        annotation_position="right",
+                    )
                 hist_fig.update_layout(
-                    yaxis=dict(range=[0, 1], title="Confluence"),
-                    xaxis_title="Date",
-                    height=300,
-                    margin=dict(t=20, b=0),
+                    **PLOTLY_LAYOUT,
+                    yaxis=dict(range=[0, 1], title="Confluence",
+                               gridcolor=COLORS["border"], zerolinecolor=COLORS["border"]),
+                    xaxis_title=None,
+                    height=280,
+                    showlegend=False,
                 )
                 st.plotly_chart(hist_fig, use_container_width=True)
 
@@ -390,65 +639,65 @@ with tab3:
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Last run", latest_run["run_at"].strftime("%Y-%m-%d %H:%M"))
-        m2.metric(
-            "Success rate",
-            f"{latest_run['succeeded']}/{latest_run['attempted']}",
-        )
+        m2.metric("Success rate", f"{latest_run['succeeded']}/{latest_run['attempted']}")
         m3.metric("Duration", f"{latest_run['duration_s']:.1f}s")
         m4.metric(
-            "Errors (Kronos/Reddit)",
+            "Errors (Kronos / Reddit)",
             f"{latest_run['kronos_errors']} / {latest_run['reddit_errors']}",
         )
 
         if latest_run["catalyst_dead"]:
-            st.error("Catalyst API is DOWN — Claude integration not working")
+            st.error("Catalyst API is DOWN")
         elif latest_run["catalyst_degraded"]:
-            st.warning("Catalyst API is degraded (>50% of calls failing)")
+            st.warning("Catalyst API is degraded")
 
         st.divider()
 
-        # Duration trend
+        sorted_runs = runs_df.sort_values("run_at")
+
         dur_fig = px.line(
-            runs_df.sort_values("run_at"),
-            x="run_at",
-            y="duration_s",
+            sorted_runs, x="run_at", y="duration_s",
             title="Pipeline duration (seconds)",
-            markers=True,
-            height=250,
+            markers=True, height=220,
         )
-        dur_fig.update_layout(margin=dict(t=40, b=0))
+        dur_fig.update_traces(
+            line=dict(color=COLORS["blue"], width=2),
+            marker=dict(size=5, color=COLORS["blue"]),
+        )
+        dur_fig.update_layout(**PLOTLY_LAYOUT)
         st.plotly_chart(dur_fig, use_container_width=True)
 
-        # Success rate trend
-        runs_df["success_rate"] = runs_df["succeeded"] / runs_df["attempted"].clip(lower=1)
+        sorted_runs = sorted_runs.copy()
+        sorted_runs["success_rate"] = sorted_runs["succeeded"] / sorted_runs["attempted"].clip(lower=1)
         sr_fig = px.line(
-            runs_df.sort_values("run_at"),
-            x="run_at",
-            y="success_rate",
+            sorted_runs, x="run_at", y="success_rate",
             title="Ticker success rate",
-            markers=True,
-            height=250,
+            markers=True, height=220,
         )
-        sr_fig.update_layout(yaxis=dict(range=[0, 1]), margin=dict(t=40, b=0))
+        sr_fig.update_traces(
+            line=dict(color=COLORS["green"], width=2),
+            marker=dict(size=5, color=COLORS["green"]),
+        )
+        sr_fig.update_layout(**PLOTLY_LAYOUT, yaxis=dict(range=[0, 1], gridcolor=COLORS["border"]))
         st.plotly_chart(sr_fig, use_container_width=True)
 
-        # Error breakdown
-        error_cols = ["kronos_errors", "reddit_errors"]
-        err_df = runs_df[["run_at"] + error_cols].sort_values("run_at")
+        err_df = runs_df[["run_at", "kronos_errors", "reddit_errors"]].sort_values("run_at")
         err_fig = px.bar(
-            err_df.melt(id_vars="run_at", value_vars=error_cols,
+            err_df.melt(id_vars="run_at", value_vars=["kronos_errors", "reddit_errors"],
                         var_name="error_type", value_name="count"),
-            x="run_at",
-            y="count",
-            color="error_type",
+            x="run_at", y="count", color="error_type",
+            color_discrete_map={
+                "kronos_errors": COLORS["orange"],
+                "reddit_errors": COLORS["red"],
+            },
             title="Errors per run",
-            height=250,
+            height=220,
             barmode="stack",
         )
-        err_fig.update_layout(margin=dict(t=40, b=0))
+        err_fig.update_layout(**PLOTLY_LAYOUT)
+        err_fig.update_traces(marker_line_width=0)
         st.plotly_chart(err_fig, use_container_width=True)
 
-        # Raw runs table
         with st.expander("Raw run log"):
             st.dataframe(runs_df.sort_values("run_at", ascending=False), use_container_width=True)
 
@@ -459,18 +708,19 @@ with tab3:
 
 with tab4:
     st.header("Kronos Accuracy")
-    st.caption(
-        "Directional accuracy: did Kronos correctly predict bullish/bearish/neutral? "
-        "Requires price_next_day to be backfilled — see TODOS.md."
+    st.markdown(
+        f'<p style="font-size:0.82rem;color:{COLORS["text_muted"]};margin-bottom:20px">'
+        f'Directional accuracy — did Kronos correctly predict bullish / bearish / neutral? '
+        f'Requires price_next_day to be backfilled (runs nightly).</p>',
+        unsafe_allow_html=True,
     )
 
     accuracy = load_accuracy()
 
     if accuracy["total"] == 0:
         st.info(
-            "No accuracy data yet. Signals need `price_next_day` filled in "
-            "before accuracy can be computed. This happens automatically after "
-            "the next-day price backfill job runs (see TODOS.md)."
+            "No accuracy data yet. The next-day price backfill job populates this "
+            "automatically after market close."
         )
     else:
         c1, c2, c3 = st.columns(3)
@@ -482,30 +732,36 @@ with tab4:
             f"{'above' if accuracy['accuracy'] > 0.5 else 'at or below'} random (50%)",
         )
 
-        # Accuracy gauge
         fig = go.Figure(go.Indicator(
             mode="gauge+number",
             value=accuracy["accuracy"] * 100,
-            title={"text": "Directional accuracy (%)"},
+            number=dict(suffix="%", font=dict(size=40, color=COLORS["text"])),
+            title={"text": "Directional accuracy", "font": {"size": 14, "color": COLORS["text_muted"]}},
             gauge={
-                "axis": {"range": [0, 100]},
-                "bar": {"color": "#4fc3f7"},
+                "axis": {"range": [0, 100], "tickcolor": COLORS["border"]},
+                "bar": {"color": COLORS["blue"], "thickness": 0.25},
+                "bgcolor": COLORS["surface2"],
+                "bordercolor": COLORS["border"],
                 "steps": [
-                    {"range": [0, 50], "color": "#d50000"},
-                    {"range": [50, 65], "color": "#ffd740"},
-                    {"range": [65, 100], "color": "#00c853"},
+                    {"range": [0, 50],  "color": f'{COLORS["red"]}33'},
+                    {"range": [50, 65], "color": f'{COLORS["amber"]}33'},
+                    {"range": [65, 100],"color": f'{COLORS["green"]}33'},
                 ],
                 "threshold": {
-                    "line": {"color": "white", "width": 3},
+                    "line": {"color": COLORS["text_muted"], "width": 2},
                     "thickness": 0.75,
                     "value": 50,
                 },
             },
         ))
-        fig.update_layout(height=300, margin=dict(t=20, b=0))
+        fig.update_layout(
+            paper_bgcolor=COLORS["surface"],
+            font=dict(family="Inter, sans-serif", color=COLORS["text"]),
+            height=280,
+            margin=dict(t=20, b=20),
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Per-ticker accuracy
         if not df.empty:
             evaluated = df[df["price_next_day"].notna() & df["price_at_signal"].notna()].copy()
             if not evaluated.empty:
@@ -543,34 +799,35 @@ with tab5:
 
     if trader is None or not trader.enabled:
         st.info(
-            "Paper trading is disabled. To enable it, add the following to your `.env` file:\n\n"
+            "Paper trading is disabled. Add to `.env`:\n\n"
             "```\n"
             "ALPACA_API_KEY=your_key_id\n"
             "ALPACA_SECRET_KEY=your_secret\n"
             "PAPER_TRADING_ENABLED=true\n"
             "POSITION_SIZE_USD=1000\n"
-            "```\n\n"
-            "Then restart the dashboard."
+            "```"
         )
     else:
-        # ── Portfolio summary ───────────────────────────────────────────
-        st.subheader("Portfolio")
         portfolio = trader.get_portfolio_summary()
 
         if "error" in portfolio:
             st.error(f"Alpaca API error: {portfolio['error']}")
         else:
+            st.subheader("Portfolio")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Portfolio value", f"${portfolio.get('portfolio_value', 0):,.2f}")
             c2.metric("Equity", f"${portfolio.get('equity', 0):,.2f}")
             c3.metric("Cash", f"${portfolio.get('cash', 0):,.2f}")
             c4.metric("Buying power", f"${portfolio.get('buying_power', 0):,.2f}")
 
-        # ── Open positions ──────────────────────────────────────────────
-        st.subheader("Open positions")
+        st.divider()
+        st.subheader("Open Positions")
         positions = portfolio.get("positions", [])
         if not positions:
-            st.caption("No open positions.")
+            st.markdown(
+                f'<p style="color:{COLORS["text_muted"]};font-size:0.85rem">No open positions.</p>',
+                unsafe_allow_html=True,
+            )
         else:
             pos_df = pd.DataFrame(positions)
             pos_df["unrealized_pnl_pct"] = pos_df["unrealized_pnl_pct"].map(lambda x: f"{x:.2f}%")
@@ -580,19 +837,16 @@ with tab5:
             pos_df["current_price"] = pos_df["current_price"].map(lambda x: f"${x:,.2f}")
             st.dataframe(
                 pos_df.rename(columns={
-                    "ticker": "Ticker",
-                    "qty": "Qty",
-                    "market_value": "Mkt Value",
-                    "avg_entry_price": "Entry",
+                    "ticker": "Ticker", "qty": "Qty",
+                    "market_value": "Mkt Value", "avg_entry_price": "Entry",
                     "current_price": "Current",
-                    "unrealized_pnl": "Unrealized P&L",
-                    "unrealized_pnl_pct": "P&L %",
+                    "unrealized_pnl": "Unrealized P&L", "unrealized_pnl_pct": "P&L %",
                 }),
                 use_container_width=True,
             )
 
-        # ── Trade stats ─────────────────────────────────────────────────
-        st.subheader("Trade statistics")
+        st.divider()
+        st.subheader("Trade Statistics")
         store = get_store()
         stats = store.get_trade_stats()
 
@@ -601,23 +855,21 @@ with tab5:
         sc2.metric("Open positions", stats["open_positions"])
         sc3.metric("Closed trades", stats["closed_trades"])
         total_pnl = stats.get("total_pnl_usd", 0.0) or 0.0
-        sc4.metric(
-            "Total P&L",
-            f"${total_pnl:,.2f}",
-            delta=f"${total_pnl:,.2f}",
-            delta_color="normal",
-        )
+        sc4.metric("Total P&L", f"${total_pnl:,.2f}", delta=f"${total_pnl:,.2f}")
 
         if stats["win_rate"] is not None:
             wc1, wc2 = st.columns(2)
             wc1.metric("Win rate", f"{stats['win_rate']:.1%}")
             wc2.metric("Avg P&L per trade", f"${stats['avg_pnl_usd']:,.2f}")
 
-        # ── Trade history ───────────────────────────────────────────────
-        st.subheader("Trade history")
+        st.divider()
+        st.subheader("Trade History")
         trades = store.get_trades(limit=100)
         if not trades:
-            st.caption("No trades recorded yet.")
+            st.markdown(
+                f'<p style="color:{COLORS["text_muted"]};font-size:0.85rem">No trades recorded yet.</p>',
+                unsafe_allow_html=True,
+            )
         else:
             trade_df = pd.DataFrame(trades)
             display_cols = [
@@ -627,42 +879,31 @@ with tab5:
             display_cols = [c for c in display_cols if c in trade_df.columns]
             trade_df = trade_df[display_cols].copy()
 
-            # Color rows by P&L
-            def highlight_pnl(row):
-                if row.get("pnl_usd") is None:
-                    return [""] * len(row)
-                color = "#00c85322" if row["pnl_usd"] > 0 else "#d5000022" if row["pnl_usd"] < 0 else ""
-                return [f"background-color:{color}"] * len(row)
-
             st.dataframe(
                 trade_df.rename(columns={
-                    "ticker": "Ticker",
-                    "signal_date": "Date",
-                    "signal_label": "Signal",
-                    "side": "Side",
-                    "qty": "Qty",
-                    "entry_price": "Entry",
-                    "exit_price": "Exit",
-                    "pnl_usd": "P&L ($)",
-                    "pnl_pct": "P&L %",
-                    "status": "Status",
-                    "opened_at": "Opened",
+                    "ticker": "Ticker", "signal_date": "Date",
+                    "signal_label": "Signal", "side": "Side", "qty": "Qty",
+                    "entry_price": "Entry", "exit_price": "Exit",
+                    "pnl_usd": "P&L ($)", "pnl_pct": "P&L %",
+                    "status": "Status", "opened_at": "Opened",
                 }),
                 use_container_width=True,
             )
 
-            # Cumulative P&L chart for closed trades
             closed_df = trade_df[trade_df["status"] == "closed"].copy() if "status" in trade_df.columns else pd.DataFrame()
             if not closed_df.empty and "pnl_usd" in closed_df.columns:
                 closed_df = closed_df.dropna(subset=["pnl_usd"]).copy()
                 if not closed_df.empty:
                     closed_df["cumulative_pnl"] = closed_df["pnl_usd"].cumsum()
-                    fig = px.line(
+                    pnl_fig = px.line(
                         closed_df.reset_index(drop=True),
                         y="cumulative_pnl",
-                        title="Cumulative P&L (closed trades)",
-                        labels={"index": "Trade #", "cumulative_pnl": "Cumulative P&L ($)"},
+                        title="Cumulative P&L",
+                        labels={"index": "Trade #", "cumulative_pnl": "P&L ($)"},
+                        height=260,
                     )
-                    fig.update_traces(line_color="#4fc3f7")
-                    fig.update_layout(height=300, margin=dict(t=40, b=0))
-                    st.plotly_chart(fig, use_container_width=True)
+                    final_pnl = closed_df["cumulative_pnl"].iloc[-1]
+                    line_color = COLORS["green"] if final_pnl >= 0 else COLORS["red"]
+                    pnl_fig.update_traces(line=dict(color=line_color, width=2))
+                    pnl_fig.update_layout(**PLOTLY_LAYOUT)
+                    st.plotly_chart(pnl_fig, use_container_width=True)
