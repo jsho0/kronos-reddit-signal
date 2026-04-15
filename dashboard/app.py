@@ -223,9 +223,10 @@ PLOTLY_LAYOUT = dict(
     plot_bgcolor=COLORS["bg"],
     font=dict(family="Inter, sans-serif", color=COLORS["text"]),
     margin=dict(t=40, b=20, l=16, r=16),
-    xaxis=dict(gridcolor=COLORS["border"], zerolinecolor=COLORS["border"]),
-    yaxis=dict(gridcolor=COLORS["border"], zerolinecolor=COLORS["border"]),
 )
+
+# Grid style to apply per-axis when customising individual charts
+_AXIS_STYLE = dict(gridcolor=COLORS["border"], zerolinecolor=COLORS["border"])
 
 # ------------------------------------------------------------------ #
 #  Shared state                                                        #
@@ -464,6 +465,8 @@ with tab1:
             )
             fig.update_layout(
                 **PLOTLY_LAYOUT,
+                xaxis=_AXIS_STYLE,
+                yaxis=_AXIS_STYLE,
                 showlegend=True,
                 legend=dict(
                     orientation="h",
@@ -614,9 +617,8 @@ with tab2:
                     )
                 hist_fig.update_layout(
                     **PLOTLY_LAYOUT,
-                    yaxis=dict(range=[0, 1], title="Confluence",
-                               gridcolor=COLORS["border"], zerolinecolor=COLORS["border"]),
-                    xaxis_title=None,
+                    xaxis={**_AXIS_STYLE, "title": None},
+                    yaxis={**_AXIS_STYLE, "range": [0, 1], "title": "Confluence"},
                     height=280,
                     showlegend=False,
                 )
@@ -664,7 +666,7 @@ with tab3:
             line=dict(color=COLORS["blue"], width=2),
             marker=dict(size=5, color=COLORS["blue"]),
         )
-        dur_fig.update_layout(**PLOTLY_LAYOUT)
+        dur_fig.update_layout(**PLOTLY_LAYOUT, xaxis=_AXIS_STYLE, yaxis=_AXIS_STYLE)
         st.plotly_chart(dur_fig, use_container_width=True)
 
         sorted_runs = sorted_runs.copy()
@@ -678,7 +680,11 @@ with tab3:
             line=dict(color=COLORS["green"], width=2),
             marker=dict(size=5, color=COLORS["green"]),
         )
-        sr_fig.update_layout(**PLOTLY_LAYOUT, yaxis=dict(range=[0, 1], gridcolor=COLORS["border"]))
+        sr_fig.update_layout(
+            **PLOTLY_LAYOUT,
+            xaxis=_AXIS_STYLE,
+            yaxis={**_AXIS_STYLE, "range": [0, 1]},
+        )
         st.plotly_chart(sr_fig, use_container_width=True)
 
         err_df = runs_df[["run_at", "kronos_errors", "reddit_errors"]].sort_values("run_at")
@@ -694,7 +700,7 @@ with tab3:
             height=220,
             barmode="stack",
         )
-        err_fig.update_layout(**PLOTLY_LAYOUT)
+        err_fig.update_layout(**PLOTLY_LAYOUT, xaxis=_AXIS_STYLE, yaxis=_AXIS_STYLE)
         err_fig.update_traces(marker_line_width=0)
         st.plotly_chart(err_fig, use_container_width=True)
 
@@ -905,5 +911,5 @@ with tab5:
                     final_pnl = closed_df["cumulative_pnl"].iloc[-1]
                     line_color = COLORS["green"] if final_pnl >= 0 else COLORS["red"]
                     pnl_fig.update_traces(line=dict(color=line_color, width=2))
-                    pnl_fig.update_layout(**PLOTLY_LAYOUT)
+                    pnl_fig.update_layout(**PLOTLY_LAYOUT, xaxis=_AXIS_STYLE, yaxis=_AXIS_STYLE)
                     st.plotly_chart(pnl_fig, use_container_width=True)
