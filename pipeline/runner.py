@@ -89,7 +89,6 @@ class PipelineRunner:
         self.ticker_timeout = ticker_timeout
         self.store = SignalStore()
         self.scraper = RedditScraper()
-        self.confluence = ConfluenceEngine()
         self.trader = AlpacaTrader()
         init_db()
 
@@ -101,6 +100,8 @@ class PipelineRunner:
         tickers = tickers or config.WATCHLIST
         health = PipelineHealth()
         t_start = time.monotonic()
+        # Fresh ConfluenceEngine each run so newly written data source plugins are picked up
+        self.confluence = ConfluenceEngine()
 
         logger.info("Pipeline starting: %d tickers, model=%s", len(tickers), self.model_size)
 
@@ -227,6 +228,7 @@ class PipelineRunner:
             kronos=kronos_pred,
             sentiment=sentiment,
             technicals=technicals,
+            ohlcv_df=ohlcv_df,
         )
 
         # ── 7. Store signal ─────────────────────────────────────────────

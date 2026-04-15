@@ -239,3 +239,43 @@ class Trade(Base):
             f"<Trade {self.ticker} {self.side} {self.qty}sh "
             f"@ {self.entry_price} [{self.status}]>"
         )
+
+
+class Experiment(Base):
+    """
+    Tracks data source experiments proposed by the Researcher agent.
+
+    Lifecycle: proposed → active → completed | archived
+    accuracy_before/after allow the Analyzer to measure impact.
+    """
+    __tablename__ = "experiments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    proposed_at = Column(String(32), default=_utcnow)
+
+    source_name = Column(String(64), nullable=False)   # e.g., "short_interest"
+    description = Column(Text)                         # researcher's proposal summary
+    module_path = Column(String(256))                  # relative path to the .py file
+    code = Column(Text)                                # full Python source
+
+    status = Column(String(16), default="proposed")    # proposed|active|completed|archived
+
+    # Accuracy snapshots (filled in by Analyzer)
+    accuracy_before = Column(Float)
+    accuracy_after = Column(Float)
+    n_signals_before = Column(Integer)
+    n_signals_after = Column(Integer)
+
+    # Lesson distilled by the Analyzer
+    lesson = Column(Text)
+
+    activated_at = Column(String(32))
+    completed_at = Column(String(32))
+
+    __table_args__ = (
+        Index("ix_experiments_status", "status"),
+        Index("ix_experiments_source_name", "source_name"),
+    )
+
+    def __repr__(self):
+        return f"<Experiment {self.source_name} [{self.status}]>"

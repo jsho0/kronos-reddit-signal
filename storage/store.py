@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from storage.db import get_session
-from storage.models import OHLCVCache, PipelineRun, RedditPost, Signal, Trade
+from storage.models import Experiment, OHLCVCache, PipelineRun, RedditPost, Signal, Trade
 
 logger = logging.getLogger(__name__)
 
@@ -369,6 +369,72 @@ class SignalStore:
                     "opened_at": r.opened_at,
                     "closed_at": r.closed_at,
                     "alpaca_order_id": r.alpaca_order_id,
+                })
+            return result
+
+    # ------------------------------------------------------------------ #
+    #  Experiments                                                         #
+    # ------------------------------------------------------------------ #
+
+    def create_experiment(self, data: dict) -> int:
+        """Insert a new experiment row. Returns id."""
+        allowed = {c.name for c in Experiment.__table__.columns}
+        filtered = {k: v for k, v in data.items() if k in allowed}
+        with get_session() as session:
+            row = Experiment(**filtered)
+            session.add(row)
+            session.flush()
+            return row.id
+
+    def get_active_experiments(self) -> list[Experiment]:
+        """Return all experiments with status='active'."""
+        with get_session() as session:
+            rows = session.execute(
+                select(Experiment).where(Experiment.status == "active")
+            ).scalars().all()
+            session.expunge_all()
+            return rows
+
+    def get_pending_experiments(self) -> list[Experiment]:
+        """Return all experiments with status='proposed'."""
+        with get_session() as session:
+            rows = session.execute(
+                select(Experiment).where(Experiment.status == "proposed")
+            ).scalars().all()
+            session.expunge_all()
+            return rows
+
+    def update_experiment(self, experiment_id: int, data: dict):
+        """Partial update an experiment row by id."""
+        from sqlalchemy import update as sa_update
+        allowed = {c.name for c in Experiment.__table__.columns}
+        filtered = {k: v for k, v in data.items() if k in allowed}
+        with get_session() as session:
+            session.execute(
+                sa_update(Experiment).where(Experiment.id == experiment_id).values(**filtered)
+            )
+
+    def get_all_experiments(self, limit: int = 50) -> list[dict]:
+        """Return experiments as dicts for dashboard display."""
+        with get_session() as session:
+            rows = session.execute(
+                select(Experiment).order_by(Experiment.proposed_at.desc()).limit(limit)
+            ).scalars().all()
+            result = []
+            for r in rows:
+                result.append({
+                    "id": r.id,
+                    "source_name": r.source_name,
+                    "description": r.description,
+                    "status": r.status,
+                    "accuracy_before": r.accuracy_before,
+                    "accuracy_after": r.accuracy_after,
+                    "n_signals_before": r.n_signals_before,
+                    "n_signals_after": r.n_signals_after,
+                    "lesson": r.lesson,
+                    "proposed_at": r.proposed_at,
+                    "activated_at": r.activated_at,
+                    "completed_at": r.completed_at,
                 })
             return result
 

@@ -13,6 +13,7 @@ from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 import config
+from meta.runner import MetaRunner
 from pipeline.runner import PipelineRunner
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ def start_scheduler(
     This call blocks — run it as the main process or in a dedicated thread.
     """
     runner = PipelineRunner()
+    meta = MetaRunner()
     scheduler = BlockingScheduler(timezone=timezone)
 
     scheduler.add_listener(
@@ -74,8 +76,21 @@ def start_scheduler(
         name="Kronos+Reddit daily signal pipeline",
     )
 
+    # Weekly meta runner: Sunday 11pm ET — proposes/activates/analyzes data source experiments
+    scheduler.add_job(
+        func=meta.run,
+        trigger="cron",
+        day_of_week="sun",
+        hour=23,
+        minute=0,
+        max_instances=1,
+        coalesce=True,
+        id="weekly_meta",
+        name="ASI-Evolve meta runner (data source evolution)",
+    )
+
     logger.info(
-        "Scheduler started: pipeline runs at %02d:%02d ET on weekdays",
+        "Scheduler started: pipeline at %02d:%02d ET weekdays, meta runner Sundays 23:00 ET",
         hour, minute,
     )
 
