@@ -6,6 +6,7 @@ Tables:
   reddit_posts   - raw Reddit posts, deduplicated by post_id
   pipeline_runs  - health/metrics for each scheduler run
   ohlcv_cache    - OHLCV bars cached to avoid redundant yfinance fetches
+  trades         - paper trades submitted to Alpaca
 
 All timestamps stored as UTC ISO strings (TEXT) for portability.
 SQLite doesn't have a native datetime type; TEXT is the recommended approach.
@@ -190,3 +191,51 @@ class OHLCVCache(Base):
 
     def __repr__(self):
         return f"<OHLCVCache {self.ticker} {self.bar_date} close={self.close}>"
+
+
+class Trade(Base):
+    """
+    Paper trades submitted to Alpaca.
+
+    One row per trade leg (entry or exit).
+    Entry and exit are linked by signal_id.
+
+    status: "open" | "closed" | "cancelled"
+    side: "buy" | "sell"
+    """
+    __tablename__ = "trades"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    signal_id = Column(Integer, nullable=False)   # FK to signals.id (soft ref)
+    ticker = Column(String(16), nullable=False)
+    signal_date = Column(String(10), nullable=False)
+    signal_label = Column(String(32))              # BUY | STRONG_BUY | SELL | etc.
+    confluence_score = Column(Float)
+
+    # Order details
+    alpaca_order_id = Column(String(64))           # Alpaca order UUID
+    side = Column(String(8))                       # "buy" | "sell"
+    qty = Column(Float)                            # shares
+    position_size_usd = Column(Float)              # dollar amount allocated
+    entry_price = Column(Float)                    # fill price on entry
+    exit_price = Column(Float)                     # fill price on exit (None if open)
+
+    # P&L (filled in when position is closed)
+    pnl_usd = Column(Float)
+    pnl_pct = Column(Float)
+
+    status = Column(String(16), default="open")    # open | closed | cancelled
+    opened_at = Column(String(32), default=_utcnow)
+    closed_at = Column(String(32))
+
+    __table_args__ = (
+        Index("ix_trades_ticker", "ticker"),
+        Index("ix_trades_status", "status"),
+        Index("ix_trades_signal_date", "signal_date"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<Trade {self.ticker} {self.side} {self.qty}sh "
+            f"@ {self.entry_price} [{self.status}]>"
+        )

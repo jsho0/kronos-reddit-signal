@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from storage.db import get_session
-from storage.models import OHLCVCache, PipelineRun, RedditPost, Signal
+from storage.models import OHLCVCache, PipelineRun, RedditPost, Signal, Trade
 
 logger = logging.getLogger(__name__)
 
@@ -305,4 +305,97 @@ class SignalStore:
             "total": len(cases),
             "correct": correct,
             "accuracy": correct / len(cases),
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Trades                                                              #
+    # ------------------------------------------------------------------ #
+
+    def record_trade(self, trade_data: dict) -> int:
+        """Insert a new trade row. Returns the row id."""
+        if "opened_at" not in trade_data:
+            trade_data["opened_at"] = datetime.now(timezone.utc).isoformat()
+
+        allowed = {c.name for c in Trade.__table__.columns}
+        filtered = {k: v for k, v in trade_data.items() if k in allowed}
+
+        with get_session() as session:
+            row = Trade(**filtered)
+            session.add(row)
+            session.flush()
+            trade_id = row.id
+        return trade_id
+
+    def close_trade(self, alpaca_order_id: str, exit_price: float, pnl_usd: float, pnl_pct: float):
+        """Mark a trade as closed and record exit price + P&L."""
+        from sqlalchemy import update
+        with get_session() as session:
+            session.execute(
+                update(Trade)
+                .where(Trade.alpaca_order_id == alpaca_order_id)
+                .values(
+                    status="closed",
+                    exit_price=exit_price,
+                    pnl_usd=pnl_usd,
+                    pnl_pct=pnl_pct,
+                    closed_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+
+    def get_trades(self, status: str = None, limit: int = 100) -> list[Trade]:
+        """Return trades, optionally filtered by status."""
+        with get_session() as session:
+            q = select(Trade).order_by(Trade.opened_at.desc()).limit(limit)
+            if status:
+                q = q.where(Trade.status == status)
+            rows = session.execute(q).scalars().all()
+            # Extract attributes inside session
+            result = []
+            for r in rows:
+                result.append({
+                    "id": r.id,
+                    "ticker": r.ticker,
+                    "signal_date": r.signal_date,
+                    "signal_label": r.signal_label,
+                    "confluence_score": r.confluence_score,
+                    "side": r.side,
+                    "qty": r.qty,
+                    "position_size_usd": r.position_size_usd,
+                    "entry_price": r.entry_price,
+                    "exit_price": r.exit_price,
+                    "pnl_usd": r.pnl_usd,
+                    "pnl_pct": r.pnl_pct,
+                    "status": r.status,
+                    "opened_at": r.opened_at,
+                    "closed_at": r.closed_at,
+                    "alpaca_order_id": r.alpaca_order_id,
+                })
+            return result
+
+    def get_trade_stats(self) -> dict:
+        """Return aggregate paper trading stats."""
+        trades = self.get_trades(limit=10000)
+        closed = [t for t in trades if t["status"] == "closed" and t["pnl_usd"] is not None]
+        open_trades = [t for t in trades if t["status"] == "open"]
+
+        if not closed:
+            return {
+                "total_trades": len(trades),
+                "open_positions": len(open_trades),
+                "closed_trades": 0,
+                "total_pnl_usd": 0.0,
+                "win_rate": None,
+                "avg_pnl_usd": None,
+            }
+
+        winners = [t for t in closed if t["pnl_usd"] > 0]
+        total_pnl = sum(t["pnl_usd"] for t in closed)
+
+        return {
+            "total_trades": len(trades),
+            "open_positions": len(open_trades),
+            "closed_trades": len(closed),
+            "total_pnl_usd": total_pnl,
+            "win_rate": len(winners) / len(closed),
+            "avg_pnl_usd": total_pnl / len(closed),
         }

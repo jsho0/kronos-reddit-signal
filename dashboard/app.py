@@ -9,6 +9,7 @@ Sections:
   2. Ticker Detail   — deep-dive into one ticker: Kronos, sentiment, technicals
   3. Pipeline Health — recent run metrics, error rates, duration trends
   4. Accuracy        — Kronos directional accuracy vs actual next-day returns
+  5. Paper Trading   — Alpaca paper portfolio, open positions, trade history
 """
 import sys
 from pathlib import Path
@@ -170,11 +171,12 @@ with st.sidebar:
 
 df = load_signals(days=lookback_days)
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊 Signal Table",
     "🔍 Ticker Detail",
     "⚙️ Pipeline Health",
     "🎯 Accuracy",
+    "💸 Paper Trading",
 ])
 
 # ================================================================== #
@@ -523,3 +525,144 @@ with tab4:
                 )
                 st.subheader("Per-ticker accuracy")
                 st.dataframe(per_ticker, use_container_width=True)
+
+
+# ================================================================== #
+#  Tab 5: Paper Trading                                               #
+# ================================================================== #
+
+with tab5:
+    st.header("Paper Trading")
+
+    try:
+        from trading.alpaca_trader import AlpacaTrader
+        trader = AlpacaTrader()
+    except Exception as e:
+        st.error(f"Failed to load AlpacaTrader: {e}")
+        trader = None
+
+    if trader is None or not trader.enabled:
+        st.info(
+            "Paper trading is disabled. To enable it, add the following to your `.env` file:\n\n"
+            "```\n"
+            "ALPACA_API_KEY=your_key_id\n"
+            "ALPACA_SECRET_KEY=your_secret\n"
+            "PAPER_TRADING_ENABLED=true\n"
+            "POSITION_SIZE_USD=1000\n"
+            "```\n\n"
+            "Then restart the dashboard."
+        )
+    else:
+        # ── Portfolio summary ───────────────────────────────────────────
+        st.subheader("Portfolio")
+        portfolio = trader.get_portfolio_summary()
+
+        if "error" in portfolio:
+            st.error(f"Alpaca API error: {portfolio['error']}")
+        else:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Portfolio value", f"${portfolio.get('portfolio_value', 0):,.2f}")
+            c2.metric("Equity", f"${portfolio.get('equity', 0):,.2f}")
+            c3.metric("Cash", f"${portfolio.get('cash', 0):,.2f}")
+            c4.metric("Buying power", f"${portfolio.get('buying_power', 0):,.2f}")
+
+        # ── Open positions ──────────────────────────────────────────────
+        st.subheader("Open positions")
+        positions = portfolio.get("positions", [])
+        if not positions:
+            st.caption("No open positions.")
+        else:
+            pos_df = pd.DataFrame(positions)
+            pos_df["unrealized_pnl_pct"] = pos_df["unrealized_pnl_pct"].map(lambda x: f"{x:.2f}%")
+            pos_df["unrealized_pnl"] = pos_df["unrealized_pnl"].map(lambda x: f"${x:,.2f}")
+            pos_df["market_value"] = pos_df["market_value"].map(lambda x: f"${x:,.2f}")
+            pos_df["avg_entry_price"] = pos_df["avg_entry_price"].map(lambda x: f"${x:,.2f}")
+            pos_df["current_price"] = pos_df["current_price"].map(lambda x: f"${x:,.2f}")
+            st.dataframe(
+                pos_df.rename(columns={
+                    "ticker": "Ticker",
+                    "qty": "Qty",
+                    "market_value": "Mkt Value",
+                    "avg_entry_price": "Entry",
+                    "current_price": "Current",
+                    "unrealized_pnl": "Unrealized P&L",
+                    "unrealized_pnl_pct": "P&L %",
+                }),
+                use_container_width=True,
+            )
+
+        # ── Trade stats ─────────────────────────────────────────────────
+        st.subheader("Trade statistics")
+        store = get_store()
+        stats = store.get_trade_stats()
+
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        sc1.metric("Total trades", stats["total_trades"])
+        sc2.metric("Open positions", stats["open_positions"])
+        sc3.metric("Closed trades", stats["closed_trades"])
+        total_pnl = stats.get("total_pnl_usd", 0.0) or 0.0
+        sc4.metric(
+            "Total P&L",
+            f"${total_pnl:,.2f}",
+            delta=f"${total_pnl:,.2f}",
+            delta_color="normal",
+        )
+
+        if stats["win_rate"] is not None:
+            wc1, wc2 = st.columns(2)
+            wc1.metric("Win rate", f"{stats['win_rate']:.1%}")
+            wc2.metric("Avg P&L per trade", f"${stats['avg_pnl_usd']:,.2f}")
+
+        # ── Trade history ───────────────────────────────────────────────
+        st.subheader("Trade history")
+        trades = store.get_trades(limit=100)
+        if not trades:
+            st.caption("No trades recorded yet.")
+        else:
+            trade_df = pd.DataFrame(trades)
+            display_cols = [
+                "ticker", "signal_date", "signal_label", "side",
+                "qty", "entry_price", "exit_price", "pnl_usd", "pnl_pct", "status", "opened_at",
+            ]
+            display_cols = [c for c in display_cols if c in trade_df.columns]
+            trade_df = trade_df[display_cols].copy()
+
+            # Color rows by P&L
+            def highlight_pnl(row):
+                if row.get("pnl_usd") is None:
+                    return [""] * len(row)
+                color = "#00c85322" if row["pnl_usd"] > 0 else "#d5000022" if row["pnl_usd"] < 0 else ""
+                return [f"background-color:{color}"] * len(row)
+
+            st.dataframe(
+                trade_df.rename(columns={
+                    "ticker": "Ticker",
+                    "signal_date": "Date",
+                    "signal_label": "Signal",
+                    "side": "Side",
+                    "qty": "Qty",
+                    "entry_price": "Entry",
+                    "exit_price": "Exit",
+                    "pnl_usd": "P&L ($)",
+                    "pnl_pct": "P&L %",
+                    "status": "Status",
+                    "opened_at": "Opened",
+                }),
+                use_container_width=True,
+            )
+
+            # Cumulative P&L chart for closed trades
+            closed_df = trade_df[trade_df["status"] == "closed"].copy() if "status" in trade_df.columns else pd.DataFrame()
+            if not closed_df.empty and "pnl_usd" in closed_df.columns:
+                closed_df = closed_df.dropna(subset=["pnl_usd"]).copy()
+                if not closed_df.empty:
+                    closed_df["cumulative_pnl"] = closed_df["pnl_usd"].cumsum()
+                    fig = px.line(
+                        closed_df.reset_index(drop=True),
+                        y="cumulative_pnl",
+                        title="Cumulative P&L (closed trades)",
+                        labels={"index": "Trade #", "cumulative_pnl": "Cumulative P&L ($)"},
+                    )
+                    fig.update_traces(line_color="#4fc3f7")
+                    fig.update_layout(height=300, margin=dict(t=40, b=0))
+                    st.plotly_chart(fig, use_container_width=True)

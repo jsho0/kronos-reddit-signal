@@ -28,6 +28,9 @@ sqlalchemy>=2.0.0
 streamlit>=1.35.0
 plotly>=5.20.0
 
+# Alpaca paper trading (optional)
+alpaca-py>=0.20.0
+
 # Utilities
 python-dotenv>=1.0.0
 apscheduler>=3.10.0

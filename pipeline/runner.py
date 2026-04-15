@@ -32,6 +32,7 @@ from reddit_scraper.scraper import RedditScraper
 from reddit_scraper.sentiment import analyze_ticker
 from storage.db import init_db
 from storage.store import SignalStore
+from trading.alpaca_trader import AlpacaTrader
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ class PipelineRunner:
         self.store = SignalStore()
         self.scraper = RedditScraper()
         self.confluence = ConfluenceEngine()
+        self.trader = AlpacaTrader()
         init_db()
 
     def run(self, tickers: list[str] = None) -> PipelineHealth:
@@ -235,7 +237,31 @@ class PipelineRunner:
             scrape_status=scrape_status,
             price_at_signal=float(ohlcv_df["close"].iloc[-1]),
         )
-        self.store.upsert_signal(signal_data)
+        signal_id = self.store.upsert_signal(signal_data)
+
+        # ── 8. Paper trade ──────────────────────────────────────────────
+        if self.trader.enabled:
+            trade_result = self.trader.handle_signal(
+                ticker=ticker,
+                label=conf_result.label,
+                confluence_score=conf_result.confluence_score,
+                signal_id=signal_id,
+            )
+            if trade_result.ok:
+                self.store.record_trade({
+                    "signal_id": signal_id,
+                    "ticker": ticker,
+                    "signal_date": today,
+                    "signal_label": conf_result.label,
+                    "confluence_score": conf_result.confluence_score,
+                    "alpaca_order_id": trade_result.order_id,
+                    "side": trade_result.action,
+                    "qty": trade_result.qty,
+                    "position_size_usd": trade_result.position_size_usd,
+                    "entry_price": trade_result.price,
+                    "status": "open",
+                })
+                logger.info("%s: paper trade recorded (%s)", ticker, trade_result.action)
 
         logger.info(
             "%s: %s (confluence=%.3f) reddit_posts=%d",
