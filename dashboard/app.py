@@ -479,12 +479,13 @@ with st.sidebar:
 df = load_signals(days=lookback_days)
 discovered = load_discovered_tickers()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "Discovery",
     "Ticker Detail",
     "Pipeline Health",
     "Accuracy",
     "Paper Trading",
+    "Signal Breakdown",
 ])
 
 
@@ -1308,3 +1309,157 @@ with tab5:
                     pnl_fig.update_traces(line=dict(color=line_color, width=2))
                     pnl_fig.update_layout(**PLOTLY_LAYOUT, xaxis=_AXIS_STYLE, yaxis=_AXIS_STYLE)
                     st.plotly_chart(pnl_fig, use_container_width=True)
+
+
+# ================================================================== #
+#  Tab 6: Signal Breakdown                                            #
+# ================================================================== #
+
+@st.cache_data(ttl=300)
+def _load_plugin_score_signals(limit: int) -> list:
+    store = get_store()
+    rows = store.get_recent_signals(days=180)
+    result = []
+    for r in rows:
+        if r.plugin_scores_json:
+            result.append(r)
+            if len(result) >= limit:
+                break
+    return result
+
+
+def _load_plugin_metadata() -> list[dict]:
+    """Scan data_sources/*.py and import each to read plugin metadata."""
+    import importlib
+    import pkgutil
+    metadata = []
+    try:
+        import data_sources as ds_pkg
+        for finder, name, ispkg in pkgutil.iter_modules(ds_pkg.__path__):
+            try:
+                mod = importlib.import_module(f"data_sources.{name}")
+                if hasattr(mod, "NAME") and hasattr(mod, "WEIGHT"):
+                    metadata.append({
+                        "name": getattr(mod, "NAME", name),
+                        "module": name,
+                        "enabled": getattr(mod, "ENABLED", False),
+                        "shadow": getattr(mod, "SHADOW_MODE", False),
+                        "weight": float(getattr(mod, "WEIGHT", 0.0)),
+                    })
+            except Exception:
+                pass
+    except ImportError:
+        pass
+    return metadata
+
+
+with tab6:
+    st.header("Signal Breakdown")
+    st.markdown(
+        f'<p style="font-size:0.82rem;color:{COLORS["text_muted"]};margin-bottom:20px">'
+        f'Feature importance — which plugins are actually driving confluence scores.</p>',
+        unsafe_allow_html=True,
+    )
+
+    breakdown_limit = st.slider("Signals to analyse", min_value=10, max_value=200, value=60, step=10)
+    scored_rows = _load_plugin_score_signals(breakdown_limit)
+
+    if not scored_rows:
+        st.info(
+            "No plugin score data yet — run the pipeline after enabling shadow mode tracking. "
+            "Data appears here once `plugin_scores_json` is populated."
+        )
+    else:
+        # Build DataFrame: rows = signals, columns = plugin names
+        records = []
+        for r in scored_rows:
+            try:
+                scores = json.loads(r.plugin_scores_json)
+                row_dict = {"ticker": r.ticker, "date": r.signal_date, "label": r.classifier_label}
+                row_dict.update(scores)
+                records.append(row_dict)
+            except Exception:
+                pass
+
+        score_df = pd.DataFrame(records)
+        meta_cols = {"ticker", "date", "label"}
+        plugin_cols = [c for c in score_df.columns if c not in meta_cols]
+
+        if not plugin_cols:
+            st.warning("Signal rows found but no plugin columns could be parsed.")
+        else:
+            means = score_df[plugin_cols].mean().sort_values(ascending=True)
+
+            # ── Mean score bar chart ──────────────────────────────────
+            st.subheader("Mean Score by Plugin")
+            bar_colors = [
+                COLORS["green"] if v > 0.55
+                else COLORS["red"] if v < 0.45
+                else COLORS["muted"]
+                for v in means.values
+            ]
+            bar_fig = go.Figure(go.Bar(
+                x=means.values,
+                y=means.index.tolist(),
+                orientation="h",
+                marker_color=bar_colors,
+                text=[f"{v:.3f}" for v in means.values],
+                textposition="outside",
+            ))
+            bar_fig.add_vline(x=0.5, line_dash="dot", line_color=COLORS["border"], line_width=1)
+            bar_fig.update_layout(
+                **PLOTLY_LAYOUT,
+                xaxis={**_AXIS_STYLE, "range": [0, 1], "title": "Mean score (0.5 = neutral)"},
+                yaxis={**_AXIS_STYLE, "title": None},
+                height=max(200, len(plugin_cols) * 45),
+                showlegend=False,
+            )
+            st.plotly_chart(bar_fig, use_container_width=True)
+
+            # ── Score distribution box plot ───────────────────────────
+            st.subheader("Score Distribution by Plugin")
+            box_fig = go.Figure()
+            for col in plugin_cols:
+                vals = score_df[col].dropna().tolist()
+                box_fig.add_trace(go.Box(
+                    y=vals,
+                    name=col,
+                    marker_color=COLORS["blue"],
+                    line_color=COLORS["blue"],
+                    boxmean=True,
+                ))
+            box_fig.update_layout(
+                **PLOTLY_LAYOUT,
+                yaxis={**_AXIS_STYLE, "range": [0, 1], "title": "Score"},
+                xaxis={**_AXIS_STYLE, "title": None},
+                height=320,
+                showlegend=False,
+            )
+            st.plotly_chart(box_fig, use_container_width=True)
+
+            # ── Plugin activation table ───────────────────────────────
+            st.subheader("Plugin Status")
+            plugin_meta = _load_plugin_metadata()
+            if plugin_meta:
+                meta_df = pd.DataFrame(plugin_meta)
+
+                def _status_badge(row):
+                    if not row["enabled"]:
+                        return "DISABLED"
+                    if row["shadow"]:
+                        return "SHADOW"
+                    return "ACTIVE"
+
+                meta_df["status"] = meta_df.apply(_status_badge, axis=1)
+                meta_df = meta_df[["name", "weight", "status", "module"]].rename(columns={
+                    "name": "Plugin", "weight": "Weight", "status": "Status", "module": "Module",
+                })
+                st.dataframe(meta_df, use_container_width=True)
+            else:
+                st.markdown(
+                    f'<p style="color:{COLORS["text_muted"]};font-size:0.85rem">'
+                    f'No plugin metadata available.</p>',
+                    unsafe_allow_html=True,
+                )
+
+            st.caption(f"Based on {len(scored_rows)} most recent signals with plugin score data.")

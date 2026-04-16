@@ -24,7 +24,11 @@ WEIGHT = 0.10
 NAME = "Options Flow"
 
 
-def fetch(ticker: str, ohlcv_df=None) -> DataSourceResult:
+def fetch(ticker: str, ohlcv_df=None, as_of_date=None) -> DataSourceResult:
+    if as_of_date is not None:
+        from datetime import date
+        if as_of_date < date.today():
+            logger.debug("options_flow: as_of_date ignored (yfinance options are live-only)")
     try:
         t = yf.Ticker(ticker)
         dates = t.options

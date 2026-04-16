@@ -413,6 +413,29 @@ class SignalStore:
             session.expunge_all()
             return rows
 
+    def get_shadow_experiments(self) -> list[Experiment]:
+        """Return active experiments whose module file still has SHADOW_MODE = True."""
+        from pathlib import Path
+        with get_session() as session:
+            rows = session.execute(
+                select(Experiment).where(Experiment.status == "active")
+            ).scalars().all()
+            session.expunge_all()
+
+        shadow = []
+        for exp in rows:
+            if exp.module_path:
+                path = Path(exp.module_path)
+                if path.exists():
+                    try:
+                        code = path.read_text(encoding="utf-8")
+                        import re as _re
+                        if _re.search(r"^SHADOW_MODE\s*=\s*True", code, _re.MULTILINE):
+                            shadow.append(exp)
+                    except Exception:
+                        pass
+        return shadow
+
     def update_experiment(self, experiment_id: int, data: dict):
         """Partial update an experiment row by id."""
         from sqlalchemy import update as sa_update

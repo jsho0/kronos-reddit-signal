@@ -15,6 +15,7 @@ SPY vs 20MA:
   below → -0.04
 """
 import logging
+from datetime import timedelta
 
 import yfinance as yf
 
@@ -27,27 +28,44 @@ WEIGHT = 0.08
 NAME = "Macro Regime"
 
 # Cache VIX + SPY within same process to avoid duplicate downloads per ticker
+# Keyed by as_of_date string so different dates don't collide
 _cache: dict = {}
 
 
-def _get_macro() -> tuple[float, float]:
-    """Returns (vix_level, spy_vs_20ma_pct). Cached per process run."""
-    if "vix" in _cache:
-        return _cache["vix"], _cache["spy_push"]
+def _get_macro(as_of_date=None) -> tuple[float, float]:
+    """Returns (vix_level, spy_vs_20ma_pct). Cached per process run per date."""
+    from datetime import date as date_cls
+    effective_date = as_of_date if as_of_date is not None else date_cls.today()
+    cache_key = str(effective_date)
+
+    if cache_key in _cache:
+        entry = _cache[cache_key]
+        return entry["vix"], entry["spy_push"]
 
     vix_push = 0.0
     spy_push = 0.0
     vix_val = 18.0  # neutral fallback
 
+    if as_of_date is not None:
+        vix_start = (as_of_date - timedelta(days=7)).isoformat()
+        vix_end = as_of_date.isoformat()
+        spy_start = (as_of_date - timedelta(days=90)).isoformat()
+        spy_end = as_of_date.isoformat()
+        vix_kwargs = {"start": vix_start, "end": vix_end}
+        spy_kwargs = {"start": spy_start, "end": spy_end}
+    else:
+        vix_kwargs = {"period": "5d"}
+        spy_kwargs = {"period": "60d"}
+
     try:
-        vix_df = yf.download("^VIX", period="5d", interval="1d", progress=False, auto_adjust=True)
+        vix_df = yf.download("^VIX", interval="1d", progress=False, auto_adjust=True, **vix_kwargs)
         if not vix_df.empty:
             vix_val = float(vix_df["Close"].to_numpy()[-1])
     except Exception as exc:
         logger.debug("macro: VIX fetch failed: %s", exc)
 
     try:
-        spy_df = yf.download("SPY", period="60d", interval="1d", progress=False, auto_adjust=True)
+        spy_df = yf.download("SPY", interval="1d", progress=False, auto_adjust=True, **spy_kwargs)
         if not spy_df.empty and len(spy_df) >= 20:
             spy_close = spy_df["Close"]
             ma20 = float(spy_close.rolling(20).mean().to_numpy()[-1])
@@ -65,15 +83,13 @@ def _get_macro() -> tuple[float, float]:
     else:
         vix_push = -0.14
 
-    _cache["vix"] = vix_val
-    _cache["spy_push"] = spy_push
-    _cache["vix_push"] = vix_push
+    _cache[cache_key] = {"vix": vix_val, "spy_push": spy_push, "vix_push": vix_push}
     return vix_val, vix_push + spy_push
 
 
-def fetch(ticker: str, ohlcv_df=None) -> DataSourceResult:
+def fetch(ticker: str, ohlcv_df=None, as_of_date=None) -> DataSourceResult:
     try:
-        vix_val, total_push = _get_macro()
+        vix_val, total_push = _get_macro(as_of_date)
         score = max(0.0, min(1.0, 0.5 + total_push))
 
         reasoning = []

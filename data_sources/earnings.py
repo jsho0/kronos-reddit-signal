@@ -26,7 +26,7 @@ WEIGHT = 0.05
 NAME = "Earnings Proximity"
 
 
-def fetch(ticker: str, ohlcv_df=None) -> DataSourceResult:
+def fetch(ticker: str, ohlcv_df=None, as_of_date=None) -> DataSourceResult:
     try:
         t = yf.Ticker(ticker)
         cal = t.calendar
@@ -34,7 +34,7 @@ def fetch(ticker: str, ohlcv_df=None) -> DataSourceResult:
         if cal is None or cal.empty:
             return DataSourceResult(name=NAME)
 
-        today = date.today()
+        today = as_of_date if as_of_date is not None else date.today()
         next_earnings = None
 
         if "Earnings Date" in cal.index:

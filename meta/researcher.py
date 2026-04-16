@@ -39,10 +39,12 @@ from data_sources import DataSourceResult
 logger = logging.getLogger(__name__)
 
 ENABLED = True
+SHADOW_MODE = True   # required for all new sources — set to False after 30+ signals confirm value
+SHADOW_SIGNAL_COUNT = 0
 WEIGHT = 0.10
 NAME = "Options Flow"
 
-def fetch(ticker: str, ohlcv_df=None) -> DataSourceResult:
+def fetch(ticker: str, ohlcv_df=None, as_of_date=None) -> DataSourceResult:
     try:
         # ... implementation ...
         return DataSourceResult(name=NAME, score=0.55, reasoning=["..."], raw={})
@@ -188,6 +190,12 @@ def propose(store) -> dict | None:
     if "ENABLED" not in code or "WEIGHT" not in code or "def fetch(" not in code:
         logger.error("researcher: generated code missing required exports")
         return None
+
+    # Inject SHADOW_MODE + SHADOW_SIGNAL_COUNT if Claude omitted them
+    if "SHADOW_MODE" not in code:
+        code = re.sub(r"^(ENABLED\s*=\s*True)", r"\1\nSHADOW_MODE = True\nSHADOW_SIGNAL_COUNT = 0", code, flags=re.MULTILINE)
+    if "SHADOW_SIGNAL_COUNT" not in code:
+        code = re.sub(r"^(SHADOW_MODE\s*=.*)", r"\1\nSHADOW_SIGNAL_COUNT = 0", code, flags=re.MULTILINE)
 
     source_name = _extract_source_name(code)
 

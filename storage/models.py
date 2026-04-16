@@ -79,6 +79,9 @@ class Signal(Base):
     price_at_signal = Column(Float)                # close price when signal was generated
     price_next_day = Column(Float)                 # actual next-day close (backfilled)
 
+    signal_version = Column(String(64))      # hash of active methodology
+    plugin_scores_json = Column(Text)        # JSON dict: {plugin_name: score}
+
     created_at = Column(String(32), default=_utcnow)
     updated_at = Column(String(32), default=_utcnow, onupdate=_utcnow)
 
@@ -268,6 +271,9 @@ class Experiment(Base):
 
     # Lesson distilled by the Analyzer
     lesson = Column(Text)
+
+    shadow_signal_count = Column(Integer, default=0)
+    promoted_at = Column(String(32))
 
     activated_at = Column(String(32))
     completed_at = Column(String(32))

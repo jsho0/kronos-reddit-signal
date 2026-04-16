@@ -23,6 +23,9 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
+import hashlib
+import json
+
 import config
 from confluence.engine import ConfluenceEngine, ConfluenceResult
 from kronos_engine.data_fetcher import fetch_ohlcv, fetch_ohlcv_for_kronos
@@ -71,6 +74,20 @@ class PipelineHealth:
         }
 
 
+def _compute_signal_version(confluence_engine: ConfluenceEngine, model_size: str) -> str:
+    """Stable 12-char hash encoding the active methodology (plugins + model)."""
+    plugins = sorted(
+        (
+            getattr(p, "NAME", p.__name__),
+            float(getattr(p, "WEIGHT", 0.0)),
+            getattr(p, "SHADOW_MODE", False),
+        )
+        for p in confluence_engine.plugins
+    )
+    payload = json.dumps({"model": model_size, "plugins": plugins}, sort_keys=True)
+    return hashlib.sha1(payload.encode()).hexdigest()[:12]
+
+
 class PipelineRunner:
     """
     Runs the full signal pipeline for a list of tickers.
@@ -101,6 +118,8 @@ class PipelineRunner:
         t_start = time.monotonic()
         # Fresh ConfluenceEngine each run so newly written data source plugins are picked up
         self.confluence = ConfluenceEngine()
+        self.signal_version = _compute_signal_version(self.confluence, self.model_size)
+        as_of_date = date.today()
 
         if tickers:
             # Debug / manual override: run specific tickers at default MC samples
@@ -129,7 +148,7 @@ class PipelineRunner:
         for ticker, n_mc in ticker_mc_map.items():
             health.tickers_attempted += 1
             try:
-                self._run_ticker(ticker, health, n_mc_samples=n_mc)
+                self._run_ticker(ticker, health, n_mc_samples=n_mc, as_of_date=as_of_date)
                 health.tickers_succeeded += 1
             except Exception as e:
                 health.tickers_failed += 1
@@ -147,14 +166,14 @@ class PipelineRunner:
         )
         return health
 
-    def _run_ticker(self, ticker: str, health: PipelineHealth, n_mc_samples: int = 5):
+    def _run_ticker(self, ticker: str, health: PipelineHealth, n_mc_samples: int = 5, as_of_date=None):
         """
         Run the full pipeline for a single ticker with a hard timeout.
         Raises on failure so the caller can count it.
         """
         timeout = self.ticker_timeout + (n_mc_samples - 5) * 10  # extra time for more MC samples
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._process_ticker, ticker, health, n_mc_samples)
+            future = executor.submit(self._process_ticker, ticker, health, n_mc_samples, as_of_date)
             try:
                 future.result(timeout=timeout)
             except FutureTimeoutError:
@@ -162,10 +181,10 @@ class PipelineRunner:
                     f"Timed out after {timeout}s"
                 )
 
-    def _process_ticker(self, ticker: str, health: PipelineHealth, n_mc_samples: int = 5):
+    def _process_ticker(self, ticker: str, health: PipelineHealth, n_mc_samples: int = 5, as_of_date=None):
         """The actual per-ticker work. Runs inside a thread."""
         logger.info("%s: starting", ticker)
-        today = date.today().isoformat()
+        today = (as_of_date or date.today()).isoformat()
 
         # ── 1. OHLCV (cache-first) ──────────────────────────────────────
         ohlcv_df = self.store.read_ohlcv_cache(ticker, min_bars=50)
@@ -175,6 +194,11 @@ class PipelineRunner:
             self.store.write_ohlcv_cache(ticker, ohlcv_df)
         else:
             logger.debug("%s: cache hit (%d bars)", ticker, len(ohlcv_df))
+
+        # Trim to as_of_date for point-in-time reproducibility
+        if as_of_date is not None:
+            import pandas as pd
+            ohlcv_df = ohlcv_df[ohlcv_df.index <= pd.Timestamp(as_of_date)]
 
         # Drop quality column for Kronos
         kronos_df = ohlcv_df.drop(columns=["amount_proxy_quality"], errors="ignore")
@@ -251,6 +275,7 @@ class PipelineRunner:
             sentiment=sentiment,
             technicals=technicals,
             ohlcv_df=ohlcv_df,
+            as_of_date=as_of_date,
         )
 
         # ── 7. Store signal ─────────────────────────────────────────────
@@ -260,6 +285,7 @@ class PipelineRunner:
             conf=conf_result,
             scrape_status=scrape_status,
             price_at_signal=float(ohlcv_df["close"].iloc[-1]),
+            signal_version=self.signal_version,
         )
         signal_id = self.store.upsert_signal(signal_data)
 
@@ -299,6 +325,7 @@ def _build_signal_dict(
     conf: ConfluenceResult,
     scrape_status: str,
     price_at_signal: float,
+    signal_version: str = None,
 ) -> dict:
     """Flatten ConfluenceResult into a flat dict for SignalStore.upsert_signal."""
     d: dict = {
@@ -309,6 +336,8 @@ def _build_signal_dict(
         "classifier_reasoning": "\n".join(conf.reasoning),
         "reddit_catalyst_status": scrape_status,
         "price_at_signal": price_at_signal,
+        "signal_version": signal_version,
+        "plugin_scores_json": json.dumps(conf.plugin_scores) if conf.plugin_scores else None,
     }
 
     k = conf.kronos_prediction

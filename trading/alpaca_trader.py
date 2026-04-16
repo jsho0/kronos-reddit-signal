@@ -32,6 +32,13 @@ BUY_LABELS = {"STRONG_BUY", "BUY"}
 # Labels that trigger closing an open position
 SELL_LABELS = {"STRONG_SELL", "SELL"}
 
+# Position sizing multipliers by signal tier.
+# STRONG_BUY = full base size; BUY = half; everything else = no entry.
+TIER_MULTIPLIERS = {
+    "STRONG_BUY": 1.0,
+    "BUY": 0.5,
+}
+
 
 @dataclass
 class TradeResult:
@@ -135,7 +142,24 @@ class AlpacaTrader:
     def _open_position(
         self, ticker: str, label: str, confluence_score: float, signal_id: int
     ) -> TradeResult:
-        """Submit a notional market buy order."""
+        """
+        Submit a notional market buy order, sized by signal tier.
+
+        Tier multipliers (applied to POSITION_SIZE_USD base):
+          STRONG_BUY → 1.0x (full size)
+          BUY        → 0.5x (half size)
+          All others → skipped (no entry)
+        """
+        multiplier = TIER_MULTIPLIERS.get(label, 0.0)
+        if multiplier == 0.0:
+            logger.info("%s: label=%s not in tier map, skipping buy", ticker, label)
+            return TradeResult(
+                ticker=ticker, action="skipped", qty=None,
+                price=None, order_id=None, position_size_usd=None,
+            )
+
+        notional = self.position_size_usd * multiplier
+
         try:
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
@@ -157,7 +181,7 @@ class AlpacaTrader:
 
             order_data = MarketOrderRequest(
                 symbol=ticker,
-                notional=self.position_size_usd,   # dollar amount, Alpaca calculates shares
+                notional=notional,   # dollar amount, Alpaca calculates shares
                 side=OrderSide.BUY,
                 time_in_force=TimeInForce.DAY,
             )
@@ -167,8 +191,8 @@ class AlpacaTrader:
             qty = float(order.filled_qty) if order.filled_qty else None
 
             logger.info(
-                "%s: BUY order submitted (id=%s label=%s confluence=%.3f size=$%.0f)",
-                ticker, order.id, label, confluence_score, self.position_size_usd,
+                "%s: BUY order submitted (id=%s label=%s confluence=%.3f size=$%.0f tier=%.0f%%)",
+                ticker, order.id, label, confluence_score, notional, multiplier * 100,
             )
 
             return TradeResult(
@@ -177,7 +201,7 @@ class AlpacaTrader:
                 qty=qty,
                 price=fill_price,
                 order_id=str(order.id),
-                position_size_usd=self.position_size_usd,
+                position_size_usd=notional,
             )
 
         except Exception as e:

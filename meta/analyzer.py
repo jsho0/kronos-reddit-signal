@@ -131,6 +131,142 @@ def _enable_source(source_name: str):
     logger.info("analyzer: re-enabled %s", source_name)
 
 
+def _promote_from_shadow(source_name: str):
+    """Set SHADOW_MODE = False in the module file."""
+    path = DATA_SOURCES_DIR / f"{source_name}.py"
+    if not path.exists():
+        return
+    code = path.read_text(encoding="utf-8")
+    updated = re.sub(r"^SHADOW_MODE\s*=\s*True", "SHADOW_MODE = False", code, flags=re.MULTILINE)
+    path.write_text(updated, encoding="utf-8")
+    logger.info("analyzer: promoted %s from shadow to active", source_name)
+
+
+def _try_promote_shadow(experiment, store) -> bool:
+    """
+    Check if a shadow-mode plugin has enough signals to evaluate for promotion.
+
+    Steps:
+    1. Require 30+ signals since activation
+    2. Compute Pearson correlation with every active plugin's scores
+    3. If any correlation > 0.85 → archive as redundant
+    4. Otherwise → promote (set SHADOW_MODE = False)
+
+    Returns True if a decision was made (promoted or archived).
+    """
+    if not experiment.activated_at:
+        return False
+
+    activated = datetime.fromisoformat(experiment.activated_at.replace("Z", "+00:00"))
+    activation_date = activated.strftime("%Y-%m-%d")
+
+    try:
+        import json as _json
+        from sqlalchemy import select
+        from storage.db import get_session
+        from storage.models import Signal
+
+        with get_session() as session:
+            rows = session.execute(
+                select(Signal).where(
+                    Signal.signal_date >= activation_date,
+                    Signal.plugin_scores_json.isnot(None),
+                )
+            ).scalars().all()
+    except Exception as exc:
+        logger.warning("analyzer: shadow check DB query failed for %s: %s", experiment.source_name, exc)
+        return False
+
+    if len(rows) < MIN_CONFIDENT_SIGNALS:
+        # Update shadow_signal_count for dashboard visibility
+        store.update_experiment(experiment.id, {"shadow_signal_count": len(rows)})
+        logger.debug(
+            "analyzer: shadow %s has %d/%d signals, waiting",
+            experiment.source_name, len(rows), MIN_CONFIDENT_SIGNALS,
+        )
+        return False
+
+    # Extract score vectors from plugin_scores_json
+    shadow_scores = []
+    active_scores: dict[str, list] = {}
+
+    for row in rows:
+        try:
+            scores = _json.loads(row.plugin_scores_json)
+        except Exception:
+            continue
+        if experiment.source_name not in scores:
+            continue
+        shadow_scores.append(scores[experiment.source_name])
+        for plugin_name, score in scores.items():
+            if plugin_name != experiment.source_name:
+                active_scores.setdefault(plugin_name, []).append(score)
+
+    if len(shadow_scores) < MIN_CONFIDENT_SIGNALS:
+        logger.debug("analyzer: shadow %s: not enough score data yet (%d)", experiment.source_name, len(shadow_scores))
+        return False
+
+    # Pearson correlation check
+    def _pearson(xs, ys):
+        n = min(len(xs), len(ys))
+        if n < 2:
+            return 0.0
+        xs, ys = xs[:n], ys[:n]
+        mx = sum(xs) / n
+        my = sum(ys) / n
+        num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        dx = sum((x - mx) ** 2 for x in xs) ** 0.5
+        dy = sum((y - my) ** 2 for y in ys) ** 0.5
+        if dx == 0 or dy == 0:
+            return 0.0
+        return num / (dx * dy)
+
+    redundant_with = None
+    max_corr = 0.0
+    for plugin_name, scores_list in active_scores.items():
+        if len(scores_list) < MIN_CONFIDENT_SIGNALS:
+            continue
+        corr = abs(_pearson(shadow_scores, scores_list))
+        if corr > max_corr:
+            max_corr = corr
+            if corr > 0.85:
+                redundant_with = plugin_name
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    if redundant_with:
+        lesson = f"Redundant with {redundant_with} (r={max_corr:.2f}) — archived without promotion."
+        _disable_source(experiment.source_name)
+        store.update_experiment(experiment.id, {
+            "status": "archived",
+            "shadow_signal_count": len(shadow_scores),
+            "lesson": lesson,
+            "completed_at": now,
+        })
+        add_lesson(
+            source_name=experiment.source_name,
+            title=f"{experiment.source_name} (shadow, redundant)",
+            lesson=lesson,
+            accuracy_delta=0.0,
+        )
+        logger.info("analyzer: shadow %s archived — %s", experiment.source_name, lesson)
+        return True
+
+    # Passed correlation check — promote
+    _promote_from_shadow(experiment.source_name)
+    store.update_experiment(experiment.id, {
+        "status": "active",
+        "shadow_signal_count": len(shadow_scores),
+        "promoted_at": now,
+        "activated_at": experiment.activated_at,  # preserve original activation date
+    })
+    logger.info(
+        "analyzer: shadow %s promoted to active (%d signals, max_corr=%.2f)",
+        experiment.source_name, len(shadow_scores), max_corr,
+    )
+    return True
+
+
 def _write_lesson(experiment, acc_before, n_before, acc_after, n_after, delta, confident, days_active):
     confidence_str = f"confident ({n_after} signals)" if confident else f"preliminary ({n_after} signals, need {MIN_CONFIDENT_SIGNALS})"
     prompt = ANALYZER_PROMPT.format(

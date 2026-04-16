@@ -17,7 +17,7 @@ Experiment statuses:
 import logging
 from datetime import datetime, timezone
 
-from meta.analyzer import analyze_experiment, recheck_rotating
+from meta.analyzer import analyze_experiment, recheck_rotating, _try_promote_shadow
 from meta.researcher import propose
 from storage.db import init_db
 from storage.store import SignalStore
@@ -33,6 +33,15 @@ class MetaRunner:
     def run(self):
         logger.info("meta: starting weekly cycle")
         t0 = datetime.now(timezone.utc)
+
+        # Step 0: check shadow experiments for promotion / redundancy
+        shadow = self.store.get_shadow_experiments()
+        promoted = 0
+        for exp in shadow:
+            if _try_promote_shadow(exp, self.store):
+                promoted += 1
+        if promoted:
+            logger.info("meta: made shadow decisions on %d experiment(s)", promoted)
 
         # Step 1: re-check rotating experiments — maybe they have enough data now
         rotating = self.store.get_rotating_experiments()

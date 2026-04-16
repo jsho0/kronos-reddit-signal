@@ -69,7 +69,8 @@ class ConfluenceResult:
     kronos_score: float
     reddit_score: float
     technicals_score: float
-    extra_scores: dict = field(default_factory=dict)   # {source_name: score}
+    extra_scores: dict = field(default_factory=dict)   # {source_name: score} active only
+    plugin_scores: dict = field(default_factory=dict)  # {source_name: score} all (active + shadow)
 
     # Pass-through for storage
     kronos_prediction: KronosPrediction | None = None
@@ -113,6 +114,10 @@ class ConfluenceEngine:
             names = [getattr(p, "NAME", p.__name__) for p in self._plugins]
             logger.info("confluence: %d plugin(s) active: %s", len(self._plugins), ", ".join(names))
 
+    @property
+    def plugins(self) -> list:
+        return self._plugins
+
     def score(
         self,
         ticker: str,
@@ -120,6 +125,7 @@ class ConfluenceEngine:
         sentiment: TickerSentiment | None,
         technicals: TechnicalIndicators | None,
         ohlcv_df=None,
+        as_of_date=None,
     ) -> ConfluenceResult:
         reasoning: set[str] = set()
 
@@ -128,25 +134,33 @@ class ConfluenceEngine:
         tech_score = _score_technicals(technicals, reasoning)
 
         # Run plugins
-        extra_scores: dict[str, float] = {}
+        extra_scores: dict[str, float] = {}       # active plugins only (for backward compat)
+        all_plugin_scores: dict[str, float] = {}  # active + shadow
         plugin_weight_total = 0.0
         plugin_contributions: list[tuple[float, float]] = []  # (score, weight)
 
         for plugin in self._plugins:
             weight = float(getattr(plugin, "WEIGHT", 0.0))
             name = getattr(plugin, "NAME", plugin.__name__)
+            shadow = getattr(plugin, "SHADOW_MODE", False)
             try:
-                result = plugin.fetch(ticker=ticker, ohlcv_df=ohlcv_df)
+                result = plugin.fetch(ticker=ticker, ohlcv_df=ohlcv_df, as_of_date=as_of_date)
                 for bullet in result.reasoning:
                     reasoning.add(bullet)
-                extra_scores[name] = result.score
-                plugin_contributions.append((result.score, weight))
-                plugin_weight_total += weight
+                all_plugin_scores[name] = result.score
+                if shadow:
+                    logger.debug("confluence: shadow plugin '%s' score=%.3f (weight=0)", name, result.score)
+                else:
+                    extra_scores[name] = result.score
+                    plugin_contributions.append((result.score, weight))
+                    plugin_weight_total += weight
             except Exception as exc:
                 logger.warning("confluence: plugin '%s' crashed on %s: %s", name, ticker, exc)
-                extra_scores[name] = 0.5
-                plugin_contributions.append((0.5, weight))
-                plugin_weight_total += weight
+                all_plugin_scores[name] = 0.5
+                if not shadow:
+                    extra_scores[name] = 0.5
+                    plugin_contributions.append((0.5, weight))
+                    plugin_weight_total += weight
 
         # Cap plugin weight so core stays >= 70%
         plugin_weight_total = min(plugin_weight_total, MAX_PLUGIN_WEIGHT_TOTAL)
@@ -186,6 +200,7 @@ class ConfluenceEngine:
             reddit_score=reddit_score,
             technicals_score=tech_score,
             extra_scores=extra_scores,
+            plugin_scores=all_plugin_scores,
             kronos_prediction=kronos,
             ticker_sentiment=sentiment,
             technicals=technicals,

@@ -69,10 +69,30 @@ def get_engine(database_url: str = None):
 def init_db(database_url: str = None):
     """
     Create all tables if they don't exist. Safe to call repeatedly (CREATE IF NOT EXISTS).
+    Runs additive ALTER TABLE migrations for new columns on existing DBs.
     Call this once at application startup.
     """
     engine = get_engine(database_url)
     Base.metadata.create_all(engine)
+
+    # Additive migrations — safe to run on every startup
+    if engine.dialect.name == "sqlite":
+        from sqlalchemy import inspect as sa_inspect
+        inspector = sa_inspect(engine)
+
+        def _add_col_if_missing(table: str, column: str, col_type: str):
+            existing = [c["name"] for c in inspector.get_columns(table)]
+            if column not in existing:
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+                    conn.commit()
+                logger.info("db migration: added %s.%s", table, column)
+
+        _add_col_if_missing("signals", "signal_version", "TEXT")
+        _add_col_if_missing("signals", "plugin_scores_json", "TEXT")
+        _add_col_if_missing("experiments", "shadow_signal_count", "INTEGER DEFAULT 0")
+        _add_col_if_missing("experiments", "promoted_at", "TEXT")
+
     logger.info("Database tables initialized")
 
 

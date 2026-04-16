@@ -10,6 +10,7 @@ Key details:
 - Same public interface as the old FinBERT module: score_posts / analyze_ticker.
 """
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 
@@ -155,7 +156,16 @@ def analyze_ticker(
 
     per_post = score_posts(texts, batch_size=batch_size)
 
-    mean_signed = sum(r.signed_score for r in per_post) / len(per_post)
+    # Karma-weighted mean: log1p(upvotes) so high-karma posts count more but
+    # not proportionally (1000-upvote post gets ~7x weight of a 1-upvote post).
+    weights = []
+    for p in posts:
+        karma = p.score if hasattr(p, "score") else p.get("score", 1)
+        karma = max(karma, 1)
+        weights.append(math.log1p(karma))
+
+    total_weight = sum(weights)
+    mean_signed = sum(r.signed_score * w for r, w in zip(per_post, weights)) / total_weight
 
     if mean_signed > 0.05:
         agg_label = "positive"
