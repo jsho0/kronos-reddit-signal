@@ -5,7 +5,7 @@ Per-ticker flow:
   1. Fetch OHLCV (cache-first, falls back to yfinance)
   2. Run Kronos prediction
   3. Fetch Reddit posts
-  4. Run FinBERT sentiment
+  4. Run Qwen sentiment
   5. Compute technicals
   6. Run confluence engine
   7. Upsert signal to DB + cache Reddit posts

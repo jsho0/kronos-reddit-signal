@@ -58,7 +58,7 @@ RESEARCHER_PROMPT = """You are a quantitative trading researcher building signal
 
 The system generates BUY/SELL signals by combining:
 - Kronos time-series model (50% weight)
-- Reddit FinBERT sentiment (25% weight)
+- Reddit Qwen sentiment (25% weight)
 - Technical indicators — RSI, MACD, Bollinger Bands, ADX, volume (25% weight)
 
 These weights are then adjusted to accommodate your new data source.

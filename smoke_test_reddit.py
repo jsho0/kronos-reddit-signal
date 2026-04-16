@@ -73,9 +73,9 @@ def test_scraper_post_dataclass():
 #  Sentiment tests                                                     #
 # ------------------------------------------------------------------ #
 
-def test_finbert_obvious_cases():
-    """FinBERT should get obvious positives/negatives right."""
-    logger.info("=== Testing FinBERT on obvious cases ===")
+def test_sentiment_obvious_cases():
+    """Sentiment scorer should get obvious positives/negatives right."""
+    logger.info("=== Testing sentiment on obvious cases ===")
     from reddit_scraper.sentiment import score_posts
 
     texts = [
@@ -93,7 +93,7 @@ def test_finbert_obvious_cases():
     wrong = []
     for i, (res, expected) in enumerate(zip(results, expected_labels)):
         if res.label != expected:
-            wrong.append(f"  [{i}] '{texts[i][:50]}...' → got {res.label}, expected {expected}")
+            wrong.append(f"  [{i}] '{texts[i][:50]}...' got {res.label}, expected {expected}")
         logger.info(
             "  [%d] %s (score=%.3f, signed=%.3f) — expected %s",
             i, res.label, res.score, res.signed_score, expected
@@ -101,16 +101,15 @@ def test_finbert_obvious_cases():
 
     if wrong:
         logger.warning("Some obvious cases scored unexpectedly:\n%s", "\n".join(wrong))
-        # Warn but don't fail — FinBERT can disagree on edge cases
     else:
         logger.info("All obvious cases scored correctly")
 
-    logger.info("finbert obvious cases: PASS")
+    logger.info("sentiment obvious cases: PASS")
 
 
-def test_finbert_aggregate():
+def test_sentiment_aggregate():
     """analyze_ticker should aggregate correctly."""
-    logger.info("=== Testing FinBERT aggregate (analyze_ticker) ===")
+    logger.info("=== Testing sentiment aggregate (analyze_ticker) ===")
     from reddit_scraper.sentiment import analyze_ticker
 
     # 4 positive posts, 1 negative → net positive
@@ -134,30 +133,30 @@ def test_finbert_aggregate():
         "analyze_ticker: label=%s signed_score=%.3f post_count=%d",
         result.label, result.signed_score, result.post_count
     )
-    logger.info("finbert aggregate: PASS")
+    logger.info("sentiment aggregate: PASS")
 
 
-def test_finbert_empty():
+def test_sentiment_empty():
     """analyze_ticker with no posts returns neutral default."""
-    logger.info("=== Testing FinBERT empty posts ===")
+    logger.info("=== Testing sentiment empty posts ===")
     from reddit_scraper.sentiment import analyze_ticker
 
     result = analyze_ticker("NOBODY", [])
     assert result.label == "neutral"
     assert result.post_count == 0
     assert result.score == 0.0
-    logger.info("finbert empty: PASS")
+    logger.info("sentiment empty: PASS")
 
 
-def test_finbert_batch_boundary():
+def test_sentiment_batch_boundary():
     """score_posts handles inputs that straddle batch_size boundary."""
-    logger.info("=== Testing FinBERT batch boundary (35 texts, batch_size=32) ===")
+    logger.info("=== Testing sentiment batch boundary (25 texts, batch_size=20) ===")
     from reddit_scraper.sentiment import score_posts
 
-    texts = ["Stock went up today"] * 35
-    results = score_posts(texts, batch_size=32)
-    assert len(results) == 35, f"Expected 35, got {len(results)}"
-    logger.info("finbert batch boundary: PASS")
+    texts = ["Stock went up today"] * 25
+    results = score_posts(texts, batch_size=20)
+    assert len(results) == 25, f"Expected 25, got {len(results)}"
+    logger.info("sentiment batch boundary: PASS")
 
 
 if __name__ == "__main__":
@@ -165,10 +164,10 @@ if __name__ == "__main__":
     tests = [
         test_scraper_live,
         test_scraper_post_dataclass,
-        test_finbert_obvious_cases,
-        test_finbert_aggregate,
-        test_finbert_empty,
-        test_finbert_batch_boundary,
+        test_sentiment_obvious_cases,
+        test_sentiment_aggregate,
+        test_sentiment_empty,
+        test_sentiment_batch_boundary,
     ]
     for test_fn in tests:
         try:

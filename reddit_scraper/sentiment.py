@@ -1,98 +1,133 @@
 """
-FinBERT sentiment analyzer.
+Qwen sentiment analyzer (via OpenRouter).
 
-Model: ProsusAI/finbert (financial domain BERT, 3-class: positive/negative/neutral)
-Loaded lazily on first call and cached at module level.
+Replaces FinBERT with qwen/qwen3-8b via OpenRouter for WSB-aware sentiment.
+Falls back to neutral on any API error so the pipeline never hard-fails.
 
 Key details:
-- Truncate to 512 TOKENS (not 512 chars). The tokenizer handles this.
-- Batch size 32: good balance of throughput vs memory on CPU.
-- Input = title + " " + body. Title carries most of the signal.
-- Returns per-post label + score, plus an aggregate for the ticker.
+- Posts are scored in batches of up to BATCH_SIZE using a single prompt per batch.
+- temperature=0 and a pinned model version for deterministic, debuggable results.
+- Same public interface as the old FinBERT module: score_posts / analyze_ticker.
 """
 import logging
+import os
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-FINBERT_MODEL = "ProsusAI/finbert"
+QWEN_MODEL = "qwen/qwen3-8b"
+BATCH_SIZE = 20  # posts per API call
 
-_pipeline = None  # cached transformers pipeline
+_client = None
 
 
-def _get_pipeline():
-    global _pipeline
-    if _pipeline is None:
-        from transformers import pipeline as hf_pipeline
-        logger.info("Loading FinBERT (%s)...", FINBERT_MODEL)
-        _pipeline = hf_pipeline(
-            "text-classification",
-            model=FINBERT_MODEL,
-            tokenizer=FINBERT_MODEL,
-            truncation=True,
-            max_length=512,       # 512 tokens, not chars
-            padding=True,
-            top_k=None,           # return all 3 class scores
+def _get_client():
+    global _client
+    if _client is None:
+        from openai import OpenAI
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENROUTER_API_KEY not set")
+        _client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
         )
-        logger.info("FinBERT loaded")
-    return _pipeline
+    return _client
+
+
+_SYSTEM_PROMPT = (
+    "You are a financial sentiment classifier. "
+    "You understand Reddit slang, WSB memes, and sarcasm. "
+    "For each post, output exactly one word: positive, negative, or neutral. "
+    "No explanations."
+)
+
+_USER_TEMPLATE = (
+    "Classify the sentiment of each post toward the stock being discussed. "
+    "Reply with one word per line in the same order: positive, negative, or neutral.\n\n"
+    "{posts}"
+)
 
 
 @dataclass
 class SentimentResult:
     label: str     # "positive" | "negative" | "neutral"
-    score: float   # magnitude of the winning label, 0.0-1.0
-    # Signed composite: positive=+score, negative=-score, neutral=0
-    # Useful for averaging across posts.
-    signed_score: float = 0.0
+    score: float   # confidence proxy: 1.0 for positive/negative, 0.0 for neutral
+    signed_score: float = 0.0  # +score, -score, or 0
 
 
 @dataclass
 class TickerSentiment:
     ticker: str
-    label: str           # majority label across all posts
-    score: float         # mean |signed_score| of all posts
-    signed_score: float  # mean signed_score (negative = net bearish)
+    label: str
+    score: float
+    signed_score: float
     post_count: int
     per_post: list[SentimentResult] = field(default_factory=list)
 
 
-def score_posts(texts: list[str], batch_size: int = 32) -> list[SentimentResult]:
-    """
-    Run FinBERT on a list of text strings.
-    Returns one SentimentResult per input, in the same order.
+def _parse_labels(raw: str, expected: int) -> list[str]:
+    """Extract one label per line from model output, pad/trim to expected count."""
+    valid = {"positive", "negative", "neutral"}
+    lines = [l.strip().lower() for l in raw.strip().splitlines() if l.strip()]
+    labels = [l if l in valid else "neutral" for l in lines]
+    # pad or trim to match expected count
+    while len(labels) < expected:
+        labels.append("neutral")
+    return labels[:expected]
 
-    texts: list of strings (title + body concatenated by caller)
+
+def score_posts(texts: list[str], batch_size: int = BATCH_SIZE) -> list[SentimentResult]:
+    """
+    Score a list of text strings via Qwen on OpenRouter.
+    Returns one SentimentResult per input, in the same order.
+    Falls back to neutral on API failure.
     """
     if not texts:
         return []
 
-    pipe = _get_pipeline()
-    results = []
+    results: list[SentimentResult] = []
 
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
-        # pipeline returns list of list of dicts when top_k=None
-        batch_output = pipe(batch)
-        for post_scores in batch_output:
-            # post_scores: [{"label": "positive", "score": 0.9}, ...]
-            best = max(post_scores, key=lambda x: x["score"])
-            label = best["label"].lower()
-            raw_score = float(best["score"])
-            signed = raw_score if label == "positive" else (-raw_score if label == "negative" else 0.0)
-            results.append(SentimentResult(
-                label=label,
-                score=raw_score,
-                signed_score=signed,
-            ))
+        labels = _score_batch(batch)
+        for label in labels:
+            if label == "positive":
+                results.append(SentimentResult(label="positive", score=1.0, signed_score=1.0))
+            elif label == "negative":
+                results.append(SentimentResult(label="negative", score=1.0, signed_score=-1.0))
+            else:
+                results.append(SentimentResult(label="neutral", score=0.0, signed_score=0.0))
 
     return results
+
+
+def _score_batch(texts: list[str]) -> list[str]:
+    """Call Qwen for a single batch. Returns a list of label strings."""
+    numbered = "\n".join(f"{i+1}. {t[:400]}" for i, t in enumerate(texts))
+    prompt = _USER_TEMPLATE.format(posts=numbered)
+    try:
+        client = _get_client()
+        response = client.chat.completions.create(
+            model=QWEN_MODEL,
+            temperature=0,
+            max_tokens=len(texts) * 4,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        raw = response.choices[0].message.content or ""
+        return _parse_labels(raw, len(texts))
+    except Exception as exc:
+        logger.warning("sentiment: Qwen batch failed, defaulting to neutral: %s", exc)
+        return ["neutral"] * len(texts)
 
 
 def analyze_ticker(
     ticker: str,
     posts,  # list[RedditPost] or list[dict] with title/body keys
-    batch_size: int = 32,
+    batch_size: int = BATCH_SIZE,
 ) -> TickerSentiment:
     """
     Score all posts for a ticker and return an aggregate TickerSentiment.
@@ -100,20 +135,13 @@ def analyze_ticker(
     Aggregate logic:
     - signed_score = mean of per-post signed scores
     - label = "positive" if mean > 0.05, "negative" if mean < -0.05, else "neutral"
-    - score = abs(signed_score)  — strength of the aggregate signal
-
-    The 0.05 threshold prevents a single loud post from flipping a neutral corpus.
+    - score = abs(signed_score)
     """
     if not posts:
         return TickerSentiment(
-            ticker=ticker,
-            label="neutral",
-            score=0.0,
-            signed_score=0.0,
-            post_count=0,
+            ticker=ticker, label="neutral", score=0.0, signed_score=0.0, post_count=0
         )
 
-    # Build text inputs: title + body. FinBERT truncates to 512 tokens.
     texts = []
     for p in posts:
         if hasattr(p, "title"):

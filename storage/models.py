@@ -114,9 +114,9 @@ class RedditPost(Base):
     post_created_utc = Column(String(32))          # ISO UTC when post was made
     fetched_at = Column(String(32), default=_utcnow)
 
-    # FinBERT output
+    # Sentiment output
     sentiment_label = Column(String(16))           # positive | negative | neutral
-    sentiment_score = Column(Float)                # raw FinBERT score 0.0 - 1.0
+    sentiment_score = Column(Float)                # sentiment score 0.0 - 1.0
 
     __table_args__ = (
         Index("ix_reddit_posts_ticker", "ticker"),
