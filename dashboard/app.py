@@ -615,7 +615,7 @@ border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin
             )
             cols = st.columns(2)
             for i, t in enumerate(building):
-                accent = COLORS["blue"] if t.priority == "MEDIUM" else COLORS["amber"]
+                accent = COLORS["blue"] if t.get("priority") == "MEDIUM" else COLORS["amber"]
                 with cols[i % 2]:
                     st.markdown(_ticker_card(t, accent), unsafe_allow_html=True)
 
