@@ -83,7 +83,7 @@ def start_scheduler(
         func=runner.run,
         trigger="cron",
         day_of_week="mon-fri",
-        hour=hour + 1,
+        hour=(hour + 1) % 24,
         minute=minute,
         max_instances=1,
         coalesce=True,
@@ -106,7 +106,7 @@ def start_scheduler(
 
     logger.info(
         "Scheduler started: discovery %02d:%02d ET, pipeline %02d:%02d ET (weekdays), meta Sundays 23:00 ET",
-        hour, minute, hour + 1, minute,
+        hour, minute, (hour + 1) % 24, minute,
     )
 
     try:
