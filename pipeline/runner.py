@@ -94,21 +94,42 @@ class PipelineRunner:
 
     def run(self, tickers: list[str] = None) -> PipelineHealth:
         """
-        Run the full pipeline for all tickers.
+        Run the full pipeline for discovered tickers (or an explicit list for debugging).
         Returns a PipelineHealth with run metrics.
         """
-        tickers = tickers or config.WATCHLIST
         health = PipelineHealth()
         t_start = time.monotonic()
         # Fresh ConfluenceEngine each run so newly written data source plugins are picked up
         self.confluence = ConfluenceEngine()
 
-        logger.info("Pipeline starting: %d tickers, model=%s", len(tickers), self.model_size)
+        if tickers:
+            # Debug / manual override: run specific tickers at default MC samples
+            ticker_mc_map = {t: 5 for t in tickers}
+        else:
+            # Discovery mode: pull from dynamic watchlist with priority-based MC samples
+            discovered = self.store.get_active_discovered_tickers()
+            if not discovered:
+                logger.warning("Pipeline: no active discovered tickers — run discovery first")
+                return health
+            ticker_mc_map = {
+                row.ticker: config.MC_SAMPLES_BY_PRIORITY.get(row.priority, 5)
+                for row in discovered
+            }
+            logger.info(
+                "Pipeline: %d discovered tickers (HIGH=%d MEDIUM=%d NEW=%d COOLING=%d)",
+                len(discovered),
+                sum(1 for r in discovered if r.priority == "HIGH"),
+                sum(1 for r in discovered if r.priority == "MEDIUM"),
+                sum(1 for r in discovered if r.priority == "NEW"),
+                sum(1 for r in discovered if r.priority == "COOLING"),
+            )
 
-        for ticker in tickers:
+        logger.info("Pipeline starting: %d tickers, model=%s", len(ticker_mc_map), self.model_size)
+
+        for ticker, n_mc in ticker_mc_map.items():
             health.tickers_attempted += 1
             try:
-                self._run_ticker(ticker, health)
+                self._run_ticker(ticker, health, n_mc_samples=n_mc)
                 health.tickers_succeeded += 1
             except Exception as e:
                 health.tickers_failed += 1
@@ -126,21 +147,22 @@ class PipelineRunner:
         )
         return health
 
-    def _run_ticker(self, ticker: str, health: PipelineHealth):
+    def _run_ticker(self, ticker: str, health: PipelineHealth, n_mc_samples: int = 5):
         """
         Run the full pipeline for a single ticker with a hard timeout.
         Raises on failure so the caller can count it.
         """
+        timeout = self.ticker_timeout + (n_mc_samples - 5) * 10  # extra time for more MC samples
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._process_ticker, ticker, health)
+            future = executor.submit(self._process_ticker, ticker, health, n_mc_samples)
             try:
-                future.result(timeout=self.ticker_timeout)
+                future.result(timeout=timeout)
             except FutureTimeoutError:
                 raise RuntimeError(
-                    f"Timed out after {self.ticker_timeout}s"
+                    f"Timed out after {timeout}s"
                 )
 
-    def _process_ticker(self, ticker: str, health: PipelineHealth):
+    def _process_ticker(self, ticker: str, health: PipelineHealth, n_mc_samples: int = 5):
         """The actual per-ticker work. Runs inside a thread."""
         logger.info("%s: starting", ticker)
         today = date.today().isoformat()
@@ -165,7 +187,7 @@ class PipelineRunner:
                 ohlcv_df=kronos_df,
                 horizon_days=config.PREDICTION_HORIZON_DAYS,
                 model_size=self.model_size,
-                n_mc_samples=5,
+                n_mc_samples=n_mc_samples,
             )
         except Exception as e:
             health.kronos_errors += 1

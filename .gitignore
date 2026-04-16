@@ -10,3 +10,4 @@ data/cache/
 *.tar.gz
 *.zip
 .DS_Store
+.gstack/

@@ -14,6 +14,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 import config
 from meta.runner import MetaRunner
+from pipeline.discovery_runner import DiscoveryRunner
 from pipeline.runner import PipelineRunner
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ def start_scheduler(
     This call blocks — run it as the main process or in a dedicated thread.
     """
     runner = PipelineRunner()
+    discovery = DiscoveryRunner()
     meta = MetaRunner()
     scheduler = BlockingScheduler(timezone=timezone)
 
@@ -63,17 +65,30 @@ def start_scheduler(
         EVENT_JOB_EXECUTED | EVENT_JOB_ERROR,
     )
 
+    # 6am: discovery (scrape Reddit, qualify tickers, build dynamic watchlist)
     scheduler.add_job(
-        func=runner.run,
-        kwargs={"tickers": tickers or config.WATCHLIST},
+        func=discovery.run,
         trigger="cron",
         day_of_week="mon-fri",
         hour=hour,
         minute=minute,
         max_instances=1,
         coalesce=True,
+        id="daily_discovery",
+        name="Reddit discovery — build dynamic watchlist",
+    )
+
+    # 7am: pipeline (runs on whatever discovery qualified)
+    scheduler.add_job(
+        func=runner.run,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=hour + 1,
+        minute=minute,
+        max_instances=1,
+        coalesce=True,
         id="daily_pipeline",
-        name="Kronos+Reddit daily signal pipeline",
+        name="Kronos+Reddit signal pipeline",
     )
 
     # Weekly meta runner: Sunday 11pm ET — proposes/activates/analyzes data source experiments
@@ -90,8 +105,8 @@ def start_scheduler(
     )
 
     logger.info(
-        "Scheduler started: pipeline at %02d:%02d ET weekdays, meta runner Sundays 23:00 ET",
-        hour, minute,
+        "Scheduler started: discovery %02d:%02d ET, pipeline %02d:%02d ET (weekdays), meta Sundays 23:00 ET",
+        hour, minute, hour + 1, minute,
     )
 
     try:

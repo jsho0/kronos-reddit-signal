@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from storage.db import get_session
-from storage.models import Experiment, OHLCVCache, PipelineRun, RedditPost, Signal, Trade
+from storage.models import DiscoveredTicker, Experiment, OHLCVCache, PipelineRun, RedditPost, Signal, Trade
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +446,129 @@ class SignalStore:
                     "completed_at": r.completed_at,
                 })
             return result
+
+    # ------------------------------------------------------------------ #
+    #  Discovered tickers                                                  #
+    # ------------------------------------------------------------------ #
+
+    def upsert_discovered_ticker(self, data: dict) -> str:
+        """
+        Insert or update a discovered ticker row.
+        Returns the ticker symbol.
+        """
+        from datetime import datetime, timezone
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        allowed = {c.name for c in DiscoveredTicker.__table__.columns}
+        filtered = {k: v for k, v in data.items() if k in allowed}
+
+        with get_session() as session:
+            stmt = (
+                sqlite_insert(DiscoveredTicker)
+                .values(**filtered)
+                .on_conflict_do_update(
+                    index_elements=["ticker"],
+                    set_=filtered,
+                )
+            )
+            session.execute(stmt)
+        return filtered["ticker"]
+
+    def get_active_discovered_tickers(self) -> list[DiscoveredTicker]:
+        """Return all tickers with status='active', ordered by priority then buzz."""
+        priority_order = {"HIGH": 0, "MEDIUM": 1, "NEW": 2, "COOLING": 3}
+        with get_session() as session:
+            rows = session.execute(
+                select(DiscoveredTicker).where(DiscoveredTicker.status == "active")
+            ).scalars().all()
+            session.expunge_all()
+        return sorted(rows, key=lambda r: (priority_order.get(r.priority, 9), -(r.last_buzz_score or 0)))
+
+    def get_discovered_ticker(self, ticker: str) -> Optional[DiscoveredTicker]:
+        """Return a single DiscoveredTicker or None."""
+        with get_session() as session:
+            row = session.execute(
+                select(DiscoveredTicker).where(DiscoveredTicker.ticker == ticker)
+            ).scalar_one_or_none()
+            if row:
+                session.expunge(row)
+            return row
+
+    def get_all_discovered_tickers(self, limit: int = 100) -> list[dict]:
+        """Return all discovered tickers as dicts, for dashboard."""
+        with get_session() as session:
+            rows = session.execute(
+                select(DiscoveredTicker)
+                .order_by(DiscoveredTicker.last_seen.desc(), DiscoveredTicker.last_buzz_score.desc())
+                .limit(limit)
+            ).scalars().all()
+            result = []
+            for r in rows:
+                result.append({
+                    "ticker": r.ticker,
+                    "priority": r.priority,
+                    "status": r.status,
+                    "consecutive_days": r.consecutive_days,
+                    "peak_streak": r.peak_streak,
+                    "total_days_seen": r.total_days_seen,
+                    "first_seen": r.first_seen,
+                    "last_seen": r.last_seen,
+                    "last_buzz_score": r.last_buzz_score,
+                    "avg_buzz_score": r.avg_buzz_score,
+                    "mention_count": r.mention_count,
+                    "company_name": r.company_name,
+                    "sector": r.sector,
+                    "industry": r.industry,
+                    "market_cap": r.market_cap,
+                    "description": r.description,
+                    "website": r.website,
+                    "thesis_quality": r.thesis_quality,
+                    "layman_summary": r.layman_summary,
+                    "bull_case": r.bull_case,
+                    "bear_case": r.bear_case,
+                    "key_catalyst": r.key_catalyst,
+                    "analysis_confidence": r.analysis_confidence,
+                    "stocktwits_count": r.stocktwits_count,
+                    "short_ratio": r.short_ratio,
+                    "short_float": r.short_float,
+                    "post_summaries": r.post_summaries,
+                    "triggering_post_url": r.triggering_post_url,
+                    "updated_at": r.updated_at,
+                })
+            return result
+
+    def apply_discovery_decay(self, seen_today: set[str], today: str):
+        """
+        For tickers NOT seen in today's discovery:
+          - 1 day missed  → COOLING
+          - 3+ days missed → DROPPED
+        """
+        from datetime import date as dt_date
+        from sqlalchemy import update as sa_update
+
+        active = self.get_active_discovered_tickers()
+        for row in active:
+            if row.ticker in seen_today:
+                continue
+            try:
+                last = dt_date.fromisoformat(row.last_seen)
+                today_d = dt_date.fromisoformat(today)
+                days_missed = (today_d - last).days
+            except Exception:
+                days_missed = 1
+
+            if days_missed >= 3:
+                new_priority = "DROPPED"
+                new_status = "dropped"
+            else:
+                new_priority = "COOLING"
+                new_status = "active"
+
+            with get_session() as session:
+                session.execute(
+                    sa_update(DiscoveredTicker)
+                    .where(DiscoveredTicker.ticker == row.ticker)
+                    .values(priority=new_priority, status=new_status)
+                )
 
     def get_trade_stats(self) -> dict:
         """Return aggregate paper trading stats."""

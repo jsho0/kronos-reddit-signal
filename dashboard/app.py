@@ -5,12 +5,13 @@ Run with:
     venv\Scripts\python.exe -m streamlit run dashboard/app.py
 
 Sections:
-  1. Signal Table    — today's signals across all tickers with labels + scores
-  2. Ticker Detail   — deep-dive into one ticker: Kronos, sentiment, technicals
+  1. Discovery      — active discovered tickers by priority (HIGH / MEDIUM / NEW / COOLING)
+  2. Ticker Detail  — deep-dive: company info, Reddit context, Claude analysis, model inputs
   3. Pipeline Health — recent run metrics, error rates, duration trends
   4. Accuracy        — Kronos directional accuracy vs actual next-day returns
   5. Paper Trading   — Alpaca paper portfolio, open positions, trade history
 """
+import json
 import sys
 from pathlib import Path
 
@@ -56,6 +57,7 @@ COLORS = {
     "orange":      "#F97316",
     "red":         "#EF4444",
     "blue":        "#38BDF8",
+    "purple":      "#A78BFA",
 }
 
 st.markdown(f"""
@@ -256,6 +258,22 @@ LABEL_TEXT_COLORS = {
 
 LABEL_ORDER = ["STRONG_BUY", "BUY", "HOLD", "SELL", "STRONG_SELL"]
 
+PRIORITY_COLORS = {
+    "HIGH":    COLORS["green"],
+    "MEDIUM":  COLORS["blue"],
+    "NEW":     COLORS["amber"],
+    "COOLING": COLORS["muted"],
+    "DROPPED": COLORS["red"],
+}
+
+PRIORITY_BG = {
+    "HIGH":    "#052e16",
+    "MEDIUM":  "#0c1a2e",
+    "NEW":     "#2d1f00",
+    "COOLING": "#1a1a1a",
+    "DROPPED": "#2d0000",
+}
+
 
 def label_badge(label: str) -> str:
     bg = LABEL_COLORS.get(label, COLORS["muted"])
@@ -266,16 +284,47 @@ def label_badge(label: str) -> str:
     )
 
 
-def card(content_html: str) -> str:
+def priority_badge(priority: str) -> str:
+    color = PRIORITY_COLORS.get(priority, COLORS["muted"])
+    icons = {"HIGH": "🔥", "MEDIUM": "📈", "NEW": "✨", "COOLING": "❄️", "DROPPED": "💀"}
+    icon = icons.get(priority, "")
     return (
-        f'<div style="background:{COLORS["surface"]};border:1px solid {COLORS["border"]};'
+        f'<span style="background:{color}22;color:{color};border:1px solid {color}44;'
+        f'padding:2px 8px;border-radius:4px;font-weight:600;font-size:0.72rem;'
+        f'letter-spacing:0.05em">{icon} {priority}</span>'
+    )
+
+
+def card(content_html: str, border_color: str = None) -> str:
+    border = border_color or COLORS["border"]
+    return (
+        f'<div style="background:{COLORS["surface"]};border:1px solid {border};'
         f'border-radius:10px;padding:16px 20px;margin-bottom:8px">{content_html}</div>'
+    )
+
+
+def quality_bar(score: int, max_score: int = 10) -> str:
+    pct = max(0, min(100, (score or 0) / max_score * 100))
+    color = COLORS["green"] if pct >= 70 else COLORS["amber"] if pct >= 50 else COLORS["red"]
+    return (
+        f'<div style="display:flex;align-items:center;gap:8px">'
+        f'<div style="flex:1;background:{COLORS["surface2"]};border-radius:4px;height:6px">'
+        f'<div style="width:{pct:.0f}%;background:{color};border-radius:4px;height:6px"></div>'
+        f'</div>'
+        f'<span style="font-size:0.75rem;color:{color};font-weight:600;min-width:24px">{score}/10</span>'
+        f'</div>'
     )
 
 
 # ------------------------------------------------------------------ #
 #  Data loaders                                                        #
 # ------------------------------------------------------------------ #
+
+@st.cache_data(ttl=300)
+def load_discovered_tickers(limit: int = 200) -> list:
+    store = get_store()
+    return store.get_all_discovered_tickers(limit=limit)
+
 
 @st.cache_data(ttl=300)
 def load_signals(days: int = 30) -> pd.DataFrame:
@@ -348,12 +397,12 @@ with st.sidebar:
         f'<div style="font-size:1.25rem;font-weight:700;color:{COLORS["text"]};'
         f'letter-spacing:-0.02em;margin-bottom:2px">Kronos Signal</div>'
         f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};margin-bottom:16px">'
-        f'Kronos + Reddit confluence engine</div>',
+        f'Reddit discovery + confluence engine</div>',
         unsafe_allow_html=True,
     )
     st.divider()
 
-    lookback_days = st.slider("Lookback (days)", min_value=1, max_value=90, value=30)
+    lookback_days = st.slider("Signal lookback (days)", min_value=1, max_value=90, value=30)
     st.divider()
 
     if st.button("Refresh data", use_container_width=True):
@@ -378,10 +427,16 @@ with st.sidebar:
     st.divider()
     st.markdown(
         f'<span style="font-size:0.75rem;color:{COLORS["text_muted"]};'
-        f'text-transform:uppercase;letter-spacing:0.05em">Run pipeline</span>',
+        f'text-transform:uppercase;letter-spacing:0.05em">Discovery + pipeline</span>',
         unsafe_allow_html=True,
     )
     st.code("python main.py --once", language="bash")
+    st.markdown(
+        f'<span style="font-size:0.75rem;color:{COLORS["text_muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.05em">Discovery only</span>',
+        unsafe_allow_html=True,
+    )
+    st.code("python main.py --discover", language="bash")
     st.markdown(
         f'<span style="font-size:0.75rem;color:{COLORS["text_muted"]};'
         f'text-transform:uppercase;letter-spacing:0.05em">Scheduler</span>',
@@ -395,110 +450,188 @@ with st.sidebar:
 # ------------------------------------------------------------------ #
 
 df = load_signals(days=lookback_days)
+discovered = load_discovered_tickers()
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Signal Table",
+    "Discovery",
     "Ticker Detail",
     "Pipeline Health",
     "Accuracy",
     "Paper Trading",
 ])
 
+
 # ================================================================== #
-#  Tab 1: Signal Table                                                #
+#  Tab 1: Discovery                                                    #
 # ================================================================== #
 
 with tab1:
-    st.header("Signal Table")
+    st.header("Reddit Discovery Watchlist")
 
-    if df.empty:
-        st.info("No signals yet. Run the pipeline: `python main.py --once`")
+    if not discovered:
+        st.info(
+            "No tickers discovered yet. Run discovery: `python main.py --discover`"
+        )
     else:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            label_filter = st.multiselect(
-                "Filter by label",
-                options=LABEL_ORDER,
-                default=LABEL_ORDER,
-            )
-        with col2:
-            direction_filter = st.multiselect(
-                "Kronos direction",
-                options=["bullish", "bearish", "neutral"],
-                default=["bullish", "bearish", "neutral"],
-            )
-        with col3:
-            min_confluence = st.slider("Min confluence score", 0.0, 1.0, 0.0, 0.01)
+        # Summary metrics
+        active = [t for t in discovered if t.get("status") == "active"]
+        high = [t for t in active if t.get("priority") == "HIGH"]
+        medium = [t for t in active if t.get("priority") == "MEDIUM"]
+        new = [t for t in active if t.get("priority") == "NEW"]
+        cooling = [t for t in discovered if t.get("priority") == "COOLING"]
 
-        filtered = df[
-            df["label"].isin(label_filter) &
-            df["direction"].isin(direction_filter) &
-            (df["confluence"] >= min_confluence)
-        ].copy()
-
-        today_str = pd.Timestamp.today().strftime("%Y-%m-%d")
-        today_df = filtered[filtered["date"] == today_str]
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total signals", len(filtered))
-        m2.metric("Today's signals", len(today_df))
-        m3.metric("Strong buys today", len(today_df[today_df["label"] == "STRONG_BUY"]))
-        m4.metric("Strong sells today", len(today_df[today_df["label"] == "STRONG_SELL"]))
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Active tickers", len(active))
+        m2.metric("HIGH priority", len(high), delta=f"🔥 {len(high)} trending")
+        m3.metric("MEDIUM priority", len(medium))
+        m4.metric("NEW this cycle", len(new))
+        m5.metric("Cooling off", len(cooling))
 
         st.divider()
 
-        if not filtered.empty:
-            label_counts = (
-                filtered.groupby(["date", "label"])
-                .size()
-                .reset_index(name="count")
-            )
-            fig = px.bar(
-                label_counts,
-                x="date",
-                y="count",
-                color="label",
-                color_discrete_map=LABEL_COLORS,
-                category_orders={"label": LABEL_ORDER},
-                title="Signal labels over time",
-                height=260,
-            )
-            fig.update_layout(
-                **PLOTLY_LAYOUT,
-                xaxis=_AXIS_STYLE,
-                yaxis=_AXIS_STYLE,
-                showlegend=True,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom", y=1.02,
-                    xanchor="right", x=1,
-                    font=dict(size=11),
-                ),
-                bargap=0.15,
-            )
-            fig.update_traces(marker_line_width=0)
-            st.plotly_chart(fig, use_container_width=True)
+        def _ticker_card(t, accent_color: str) -> str:
+            """Build HTML for a single discovered ticker card."""
+            ticker = t.get("ticker", "")
+            name = t.get("company_name") or ticker
+            sector = t.get("sector") or ""
+            industry = t.get("industry") or ""
+            sector_line = " · ".join(filter(None, [sector, industry]))
 
-        display_cols = ["date", "ticker", "label", "confluence", "direction",
-                        "kronos_conf", "reddit_sentiment", "rsi", "reddit_posts"]
-        display_df = filtered[display_cols].copy()
-        display_df["confluence"] = display_df["confluence"].round(3)
-        display_df["kronos_conf"] = display_df["kronos_conf"].round(2)
-        display_df["rsi"] = display_df["rsi"].round(1)
+            cap_str = ""
+            cap_val = t.get("market_cap")
+            if cap_val:
+                if cap_val >= 1e12:
+                    cap_str = f"${cap_val/1e12:.1f}T"
+                elif cap_val >= 1e9:
+                    cap_str = f"${cap_val/1e9:.1f}B"
+                else:
+                    cap_str = f"${cap_val/1e6:.0f}M"
 
-        st.dataframe(
-            display_df.sort_values(["date", "confluence"], ascending=[False, False]),
-            use_container_width=True,
-            height=380,
-            column_config={
-                "confluence": st.column_config.ProgressColumn(
-                    "Confluence", min_value=0, max_value=1, format="%.3f"
-                ),
-                "kronos_conf": st.column_config.ProgressColumn(
-                    "Kronos conf", min_value=0, max_value=1, format="%.2f"
-                ),
-            },
-        )
+            streak = t.get("consecutive_days", 1)
+            streak_icon = "🔥" if streak >= 4 else "📈" if streak >= 2 else "✨"
+            streak_str = f"{streak_icon} Day {streak} streak"
+
+            buzz = t.get("last_buzz_score")
+            buzz_str = f"Buzz {buzz:.1f}" if buzz else ""
+            mentions = t.get("mention_count")
+            mention_str = f"{mentions} mentions" if mentions else ""
+
+            summary = t.get("layman_summary") or ""
+            if len(summary) > 200:
+                summary = summary[:200] + "..."
+
+            bull = t.get("bull_case") or ""
+            if len(bull) > 120:
+                bull = bull[:120] + "..."
+            bear = t.get("bear_case") or ""
+            if len(bear) > 120:
+                bear = bear[:120] + "..."
+
+            quality_html = ""
+            thesis_quality = t.get("thesis_quality")
+            if thesis_quality is not None:
+                pct = max(0, min(100, thesis_quality / 10 * 100))
+                qcolor = COLORS["green"] if pct >= 70 else COLORS["amber"] if pct >= 50 else COLORS["red"]
+                quality_html = (
+                    f'<div style="display:flex;align-items:center;gap:6px;margin-top:4px">'
+                    f'<span style="font-size:0.72rem;color:{COLORS["text_muted"]}">QUALITY</span>'
+                    f'<div style="flex:1;background:{COLORS["surface2"]};border-radius:3px;height:5px">'
+                    f'<div style="width:{pct:.0f}%;background:{qcolor};border-radius:3px;height:5px"></div>'
+                    f'</div>'
+                    f'<span style="font-size:0.72rem;color:{qcolor};font-weight:600">{thesis_quality}/10</span>'
+                    f'</div>'
+                )
+
+            url_html = ""
+            post_url = t.get("triggering_post_url")
+            if post_url:
+                url_html = (
+                    f'<a href="{post_url}" target="_blank" '
+                    f'style="font-size:0.75rem;color:{COLORS["blue"]};text-decoration:none;">'
+                    f'View triggering post ↗</a>'
+                )
+
+            first_seen = t.get("first_seen", "")
+            priority = t.get("priority", "")
+            meta_parts = [p for p in [buzz_str, mention_str, cap_str, f"First seen {first_seen}"] if p]
+            meta_line = " &nbsp;·&nbsp; ".join(meta_parts)
+
+            bull_html = (
+                f'<div style="margin-top:8px;font-size:0.78rem;color:{COLORS["green_dim"]}">'
+                f'<span style="font-weight:600;color:{COLORS["green"]}">Bull: </span>{bull}</div>'
+            ) if bull else ""
+
+            bear_html = (
+                f'<div style="margin-top:4px;font-size:0.78rem;color:{COLORS["text_muted"]}">'
+                f'<span style="font-weight:600;color:{COLORS["red"]}">Bear: </span>{bear}</div>'
+            ) if bear else ""
+
+            return f"""
+<div style="background:{COLORS['surface']};border:1px solid {accent_color}44;
+border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin-bottom:10px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+    <div>
+      <span style="font-size:1.1rem;font-weight:700;color:{COLORS['text']}">{ticker}</span>
+      <span style="font-size:0.85rem;color:{COLORS['text_muted']};margin-left:8px">{name}</span>
+      {f'<span style="font-size:0.75rem;color:{COLORS["text_muted"]};margin-left:8px">{sector_line}</span>' if sector_line else ''}
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span style="background:{accent_color}22;color:{accent_color};border:1px solid {accent_color}44;
+      padding:2px 8px;border-radius:4px;font-weight:600;font-size:0.72rem">{priority}</span>
+      <span style="font-size:0.78rem;color:{COLORS['text_muted']}">{streak_str}</span>
+    </div>
+  </div>
+  <div style="font-size:0.72rem;color:{COLORS['muted']};margin-top:4px">{meta_line}</div>
+  {quality_html}
+  {f'<div style="font-size:0.82rem;color:{COLORS["text_muted"]};margin-top:10px;line-height:1.5">{summary}</div>' if summary else ''}
+  {bull_html}
+  {bear_html}
+  {f'<div style="margin-top:10px">{url_html}</div>' if url_html else ''}
+</div>
+"""
+
+        # HIGH priority section
+        if high:
+            st.markdown(
+                f'<div style="font-size:0.8rem;font-weight:700;color:{COLORS["green"]};'
+                f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">'
+                f'🔥 High Priority ({len(high)} tickers)</div>',
+                unsafe_allow_html=True,
+            )
+            cols = st.columns(2)
+            for i, t in enumerate(high):
+                with cols[i % 2]:
+                    st.markdown(_ticker_card(t, COLORS["green"]), unsafe_allow_html=True)
+
+        # MEDIUM + NEW (building) section
+        building = medium + new
+        if building:
+            st.divider()
+            st.markdown(
+                f'<div style="font-size:0.8rem;font-weight:700;color:{COLORS["blue"]};'
+                f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">'
+                f'📈 Building ({len(building)} tickers)</div>',
+                unsafe_allow_html=True,
+            )
+            cols = st.columns(2)
+            for i, t in enumerate(building):
+                accent = COLORS["blue"] if t.priority == "MEDIUM" else COLORS["amber"]
+                with cols[i % 2]:
+                    st.markdown(_ticker_card(t, accent), unsafe_allow_html=True)
+
+        # COOLING section
+        if cooling:
+            st.divider()
+            st.markdown(
+                f'<div style="font-size:0.8rem;font-weight:700;color:{COLORS["muted"]};'
+                f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">'
+                f'❄️ Cooling Off ({len(cooling)} tickers)</div>',
+                unsafe_allow_html=True,
+            )
+            cols = st.columns(3)
+            for i, t in enumerate(cooling):
+                with cols[i % 3]:
+                    st.markdown(_ticker_card(t, COLORS["muted"]), unsafe_allow_html=True)
 
 
 # ================================================================== #
@@ -508,64 +641,237 @@ with tab1:
 with tab2:
     st.header("Ticker Detail")
 
-    if df.empty:
-        st.info("No signals yet.")
+    # Build list from discovered tickers first, then fall back to signal tickers
+    disc_tickers = {t["ticker"]: t for t in discovered} if discovered else {}
+    signal_tickers = sorted(df["ticker"].unique().tolist()) if not df.empty else []
+    all_tickers = sorted(set(list(disc_tickers.keys()) + signal_tickers))
+
+    if not all_tickers:
+        st.info("No data yet. Run the pipeline: `python main.py --once`")
     else:
-        tickers = sorted(df["ticker"].unique().tolist())
-        selected_ticker = st.selectbox("Select ticker", tickers)
-        ticker_df = df[df["ticker"] == selected_ticker].sort_values("date", ascending=False)
+        selected_ticker = st.selectbox("Select ticker", all_tickers)
+        disc = disc_tickers.get(selected_ticker)
+        ticker_df = df[df["ticker"] == selected_ticker].sort_values("date", ascending=False) if not df.empty else pd.DataFrame()
 
-        if ticker_df.empty:
-            st.warning(f"No signals for {selected_ticker}")
-        else:
-            latest = ticker_df.iloc[0]
+        # Company snapshot banner
+        if disc:
+            company_name = disc.get("company_name") or selected_ticker
+            priority_color = PRIORITY_COLORS.get(disc.get("priority", ""), COLORS["muted"])
+            cap_str = ""
+            mkt_cap = disc.get("market_cap")
+            if mkt_cap:
+                cap_str = f"${mkt_cap/1e12:.1f}T" if mkt_cap >= 1e12 else f"${mkt_cap/1e9:.1f}B" if mkt_cap >= 1e9 else f"${mkt_cap/1e6:.0f}M"
 
-            # Signal banner
-            color = LABEL_COLORS.get(latest["label"], COLORS["muted"])
-            text_color = LABEL_TEXT_COLORS.get(latest["label"], "#fff")
+            sector_parts = [p for p in [disc.get("sector"), disc.get("industry")] if p]
+
+            website_link = (
+                f' &nbsp;<a href="{disc["website"]}" target="_blank" '
+                f'style="color:{COLORS["blue"]};font-size:0.75rem;text-decoration:none">'
+                f'website ↗</a>'
+            ) if disc.get("website") else ""
+
+            priority = disc.get("priority", "")
+            consec = disc.get("consecutive_days", 1)
+            peak = disc.get("peak_streak", 1)
+            first_seen = disc.get("first_seen", "")
+
             st.markdown(
-                f'<div style="background:{color};color:{text_color};padding:14px 20px;'
-                f'border-radius:10px;display:flex;align-items:center;justify-content:space-between;'
-                f'margin-bottom:20px">'
-                f'<span style="font-size:1.3rem;font-weight:700;letter-spacing:0.02em">'
-                f'{latest["label"]}</span>'
-                f'<span style="font-size:0.85rem;opacity:0.75">{selected_ticker} &middot; {latest["date"]}</span>'
+                f'<div style="background:{COLORS["surface"]};border:1px solid {priority_color}44;'
+                f'border-left:4px solid {priority_color};border-radius:10px;padding:16px 20px;margin-bottom:16px">'
+                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">'
+                f'<div>'
+                f'<span style="font-size:1.5rem;font-weight:700;color:{COLORS["text"]}">{selected_ticker}</span>'
+                f'<span style="font-size:1rem;color:{COLORS["text_muted"]};margin-left:10px">{company_name}</span>'
+                f'{website_link}'
+                f'</div>'
+                f'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+                f'<span style="background:{priority_color}22;color:{priority_color};border:1px solid {priority_color}44;'
+                f'padding:3px 10px;border-radius:5px;font-weight:600;font-size:0.78rem">{priority}</span>'
+                f'<span style="font-size:0.78rem;color:{COLORS["text_muted"]}">Day {consec} streak &nbsp;·&nbsp; Peak {peak} days</span>'
+                f'</div>'
+                f'</div>'
+                f'<div style="font-size:0.78rem;color:{COLORS["muted"]};margin-top:6px">'
+                f'{" &nbsp;·&nbsp; ".join(sector_parts)}'
+                f'{f" &nbsp;·&nbsp; Mkt cap {cap_str}" if cap_str else ""}'
+                f' &nbsp;·&nbsp; First seen {first_seen}'
+                f'</div>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
 
-            col_conf, col_dir, col_price = st.columns(3)
-            with col_conf:
-                st.metric("Confluence score", f"{latest['confluence']:.3f}")
-            with col_dir:
-                st.metric(
-                    "Kronos direction",
-                    latest["direction"] or "—",
-                    f"{(latest['kronos_pct'] or 0)*100:+.1f}% predicted",
+            # Description
+            description = disc.get("description") or ""
+            if description:
+                st.markdown(
+                    f'<p style="font-size:0.83rem;color:{COLORS["text_muted"]};'
+                    f'line-height:1.6;margin-bottom:16px">{description[:400]}{"..." if len(description) > 400 else ""}</p>',
+                    unsafe_allow_html=True,
                 )
-            with col_price:
-                st.metric(
-                    "Price at signal",
-                    f"${latest['price_at_signal']:,.2f}" if latest["price_at_signal"] else "—",
+
+        # Latest signal (if any)
+        if not ticker_df.empty:
+            latest = ticker_df.iloc[0]
+            color = LABEL_COLORS.get(latest["label"], COLORS["muted"])
+            text_color = LABEL_TEXT_COLORS.get(latest["label"], "#fff")
+            st.markdown(
+                f'<div style="background:{color};color:{text_color};padding:12px 18px;'
+                f'border-radius:10px;display:flex;align-items:center;justify-content:space-between;'
+                f'margin-bottom:16px">'
+                f'<span style="font-size:1.1rem;font-weight:700;letter-spacing:0.02em">'
+                f'Latest signal: {latest["label"]}</span>'
+                f'<span style="font-size:0.82rem;opacity:0.75">{latest["date"]} &nbsp;·&nbsp; '
+                f'Confluence {latest["confluence"]:.3f}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.divider()
+
+        # Discovery analysis section
+        layman_summary = disc.get("layman_summary") if disc else None
+        bull_case = disc.get("bull_case") if disc else None
+        bear_case = disc.get("bear_case") if disc else None
+        key_catalyst = disc.get("key_catalyst") if disc else None
+
+        if disc and (layman_summary or bull_case or bear_case or key_catalyst):
+            st.subheader("Claude's Analysis")
+
+            if layman_summary:
+                st.markdown(
+                    f'<div style="background:{COLORS["surface"]};border:1px solid {COLORS["border"]};'
+                    f'border-radius:8px;padding:14px 18px;margin-bottom:12px;'
+                    f'font-size:0.85rem;color:{COLORS["text"]};line-height:1.6">'
+                    f'<span style="font-size:0.72rem;color:{COLORS["text_muted"]};'
+                    f'text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Summary</span>'
+                    f'<div style="margin-top:6px">{layman_summary}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            analysis_cols = st.columns(2)
+            with analysis_cols[0]:
+                if bull_case:
+                    st.markdown(
+                        f'<div style="background:#052e16;border:1px solid {COLORS["green"]}33;'
+                        f'border-radius:8px;padding:14px 18px;height:100%">'
+                        f'<div style="font-size:0.72rem;color:{COLORS["green"]};'
+                        f'text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:6px">Bull Case</div>'
+                        f'<div style="font-size:0.83rem;color:{COLORS["green_dim"]};line-height:1.5">{bull_case}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+            with analysis_cols[1]:
+                if bear_case:
+                    st.markdown(
+                        f'<div style="background:#2d0000;border:1px solid {COLORS["red"]}33;'
+                        f'border-radius:8px;padding:14px 18px;height:100%">'
+                        f'<div style="font-size:0.72rem;color:{COLORS["red"]};'
+                        f'text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:6px">Bear Case</div>'
+                        f'<div style="font-size:0.83rem;color:#fca5a5;line-height:1.5">{bear_case}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            if key_catalyst:
+                st.markdown(
+                    f'<div style="background:{COLORS["surface2"]};border:1px solid {COLORS["border"]};'
+                    f'border-radius:8px;padding:12px 18px;margin-top:10px;'
+                    f'font-size:0.83rem;color:{COLORS["text_muted"]};line-height:1.5">'
+                    f'<span style="color:{COLORS["amber"]};font-weight:600">Key catalyst: </span>'
+                    f'{key_catalyst}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            confidence_row = []
+            analysis_confidence = disc.get("analysis_confidence")
+            thesis_quality = disc.get("thesis_quality")
+            buzz_score = disc.get("last_buzz_score")
+            stocktwits = disc.get("stocktwits_count")
+            if analysis_confidence is not None:
+                confidence_row.append(f"Analysis confidence: {analysis_confidence}/10")
+            if thesis_quality is not None:
+                confidence_row.append(f"Thesis quality: {thesis_quality}/10")
+            if buzz_score:
+                confidence_row.append(f"Buzz score: {buzz_score:.1f}")
+            if stocktwits:
+                confidence_row.append(f"StockTwits: {stocktwits:,} msgs")
+
+            if confidence_row:
+                st.markdown(
+                    f'<div style="font-size:0.75rem;color:{COLORS["muted"]};margin-top:8px">'
+                    f' &nbsp;·&nbsp; '.join(confidence_row) + '</div>',
+                    unsafe_allow_html=True,
                 )
 
             st.divider()
 
+        # Reddit post summaries
+        post_summaries_raw = disc.get("post_summaries") if disc else None
+        triggering_url = disc.get("triggering_post_url") if disc else None
+
+        if disc and post_summaries_raw:
+            st.subheader("Reddit Posts")
+            try:
+                summaries = json.loads(post_summaries_raw) if isinstance(post_summaries_raw, str) else post_summaries_raw
+                if isinstance(summaries, list) and summaries:
+                    for i, summary in enumerate(summaries[:6], 1):
+                        st.markdown(
+                            f'<div style="display:flex;gap:10px;padding:10px 0;'
+                            f'border-bottom:1px solid {COLORS["border"]}">'
+                            f'<span style="color:{COLORS["green"]};font-weight:600;font-size:0.82rem;'
+                            f'flex-shrink:0;min-width:20px">{i}.</span>'
+                            f'<span style="font-size:0.82rem;color:{COLORS["text_muted"]};line-height:1.5">'
+                            f'{summary}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    if triggering_url:
+                        st.markdown(
+                            f'<a href="{triggering_url}" target="_blank" '
+                            f'style="font-size:0.78rem;color:{COLORS["blue"]};text-decoration:none;'
+                            f'display:inline-block;margin-top:8px">View top Reddit post ↗</a>',
+                            unsafe_allow_html=True,
+                        )
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            st.divider()
+
+        # Model inputs
+        if not ticker_df.empty:
+            latest = ticker_df.iloc[0]
+            st.subheader("Model Inputs (Latest Signal)")
+
             c1, c2, c3 = st.columns(3)
 
             with c1:
-                st.subheader("Kronos")
+                st.markdown(
+                    f'<div style="font-size:0.72rem;color:{COLORS["text_muted"]};'
+                    f'text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:10px">Kronos</div>',
+                    unsafe_allow_html=True,
+                )
+                st.metric("Direction", latest["direction"] or "—")
                 st.metric("Confidence", f"{latest['kronos_conf']:.0%}" if latest['kronos_conf'] else "—")
                 st.metric("Predicted move", f"{(latest['kronos_pct'] or 0)*100:+.2f}%")
+                st.metric("Price at signal", f"${latest['price_at_signal']:,.2f}" if latest["price_at_signal"] else "—")
 
             with c2:
-                st.subheader("Reddit")
+                st.markdown(
+                    f'<div style="font-size:0.72rem;color:{COLORS["text_muted"]};'
+                    f'text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:10px">Reddit Sentiment</div>',
+                    unsafe_allow_html=True,
+                )
                 st.metric("Sentiment", latest["reddit_sentiment"] or "—")
                 st.metric("Score", f"{latest['reddit_score']:+.2f}" if latest['reddit_score'] is not None else "—")
-                st.metric("Posts", int(latest["reddit_posts"] or 0))
+                st.metric("Posts analyzed", int(latest["reddit_posts"] or 0))
 
             with c3:
-                st.subheader("Technicals")
+                st.markdown(
+                    f'<div style="font-size:0.72rem;color:{COLORS["text_muted"]};'
+                    f'text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:10px">Technicals</div>',
+                    unsafe_allow_html=True,
+                )
                 st.metric("RSI (14)", f"{latest['rsi']:.1f}" if latest['rsi'] else "—")
                 st.metric("MACD", latest["macd"] or "—")
                 st.metric("Bollinger", latest["bb"] or "—")
@@ -574,7 +880,7 @@ with tab2:
 
             if latest["reasoning"]:
                 st.divider()
-                st.subheader("Reasoning")
+                st.subheader("Confluence Reasoning")
                 lines = [l.strip() for l in str(latest["reasoning"]).split("\n") if l.strip()]
                 bullets_html = "".join(
                     f'<div style="display:flex;gap:8px;margin-bottom:6px;font-size:0.85rem;'
@@ -590,7 +896,7 @@ with tab2:
 
             if len(ticker_df) > 1:
                 st.divider()
-                st.subheader("Confluence history")
+                st.subheader("Confluence History")
                 hist_fig = go.Figure()
                 hist_fig.add_trace(go.Scatter(
                     x=ticker_df["date"],
@@ -602,8 +908,7 @@ with tab2:
                     fill="tozeroy",
                     fillcolor=f'{COLORS["blue"]}18',
                 ))
-                # Threshold lines matching current thresholds
-                for y, color, label in [
+                for y, color, lbl in [
                     (0.68, COLORS["green"],      "STRONG BUY"),
                     (0.54, COLORS["green_dim"],  "BUY"),
                     (0.46, COLORS["orange"],     "SELL"),
@@ -611,7 +916,7 @@ with tab2:
                 ]:
                     hist_fig.add_hline(
                         y=y, line_dash="dot", line_color=color, line_width=1,
-                        annotation_text=label,
+                        annotation_text=lbl,
                         annotation_font=dict(size=10, color=color),
                         annotation_position="right",
                     )
@@ -623,6 +928,9 @@ with tab2:
                     showlegend=False,
                 )
                 st.plotly_chart(hist_fig, use_container_width=True)
+
+        elif not disc:
+            st.info(f"No data for {selected_ticker} yet.")
 
 
 # ================================================================== #

@@ -279,3 +279,77 @@ class Experiment(Base):
 
     def __repr__(self):
         return f"<Experiment {self.source_name} [{self.status}]>"
+
+
+class DiscoveredTicker(Base):
+    """
+    Dynamic watchlist built from Reddit discovery.
+
+    One row per ticker. Tracks discovery streak, priority tier, and
+    qualitative analysis from the qualifier agent.
+
+    Priority tiers:
+      NEW      — first seen today
+      MEDIUM   — 2-3 consecutive days
+      HIGH     — 4+ consecutive days
+      COOLING  — missed yesterday, still active
+      DROPPED  — missed 3+ days, excluded from pipeline
+
+    Status: active | dropped
+    """
+    __tablename__ = "discovered_tickers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String(16), nullable=False, unique=True)
+
+    # Streak tracking
+    first_seen = Column(String(10))           # YYYY-MM-DD
+    last_seen = Column(String(10))            # YYYY-MM-DD
+    consecutive_days = Column(Integer, default=1)
+    peak_streak = Column(Integer, default=1)
+    total_days_seen = Column(Integer, default=1)
+
+    # Priority + status
+    priority = Column(String(16), default="NEW")    # NEW|MEDIUM|HIGH|COOLING|DROPPED
+    status = Column(String(16), default="active")   # active|dropped
+
+    # Buzz metrics (updated each discovery run)
+    last_buzz_score = Column(Float)
+    avg_buzz_score = Column(Float)
+    mention_count = Column(Integer, default=0)
+
+    # Company info (cached from yfinance at first qualification)
+    company_name = Column(String(128))
+    sector = Column(String(64))
+    industry = Column(String(64))
+    market_cap = Column(Float)
+    description = Column(Text)
+    website = Column(String(256))
+
+    # Claude analysis (updated each qualification)
+    thesis_quality = Column(Float)           # 0-10 Claude quality score
+    layman_summary = Column(Text)            # plain English summary
+    bull_case = Column(Text)
+    bear_case = Column(Text)
+    key_catalyst = Column(String(256))
+    analysis_confidence = Column(String(16)) # low|medium|high
+
+    # Cross-reference signals
+    stocktwits_count = Column(Integer)
+    short_ratio = Column(Float)
+    short_float = Column(Float)
+
+    # Reddit posts that triggered discovery (JSON list of post dicts)
+    post_summaries = Column(Text)
+    triggering_post_url = Column(String(512))
+
+    updated_at = Column(String(32), default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_discovered_tickers_status", "status"),
+        Index("ix_discovered_tickers_priority", "priority"),
+        Index("ix_discovered_tickers_last_seen", "last_seen"),
+    )
+
+    def __repr__(self):
+        return f"<DiscoveredTicker {self.ticker} [{self.priority}] streak={self.consecutive_days}>"
