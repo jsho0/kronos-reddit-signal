@@ -668,10 +668,14 @@ border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin
 with tab2:
     st.header("Ticker Detail")
 
-    # Build list from discovered tickers first, then fall back to signal tickers
+    # Build list: discovered tickers that also have signals, or fall back to all signal tickers
     disc_tickers = {t["ticker"]: t for t in discovered} if discovered else {}
     signal_tickers = sorted(df["ticker"].unique().tolist()) if not df.empty else []
-    all_tickers = sorted(set(list(disc_tickers.keys()) + signal_tickers))
+    if disc_tickers:
+        # Only show tickers that are currently in the discovery watchlist
+        all_tickers = sorted(t for t in signal_tickers if t in disc_tickers) or sorted(disc_tickers.keys())
+    else:
+        all_tickers = signal_tickers
 
     if not all_tickers:
         st.info("No data yet. Run the pipeline: `python main.py --once`")
