@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import anthropic
+from openai import OpenAI
 
 from meta.cognition import add_lesson
 
@@ -90,19 +90,22 @@ def _get_accuracy_for_period(store, since_date: str) -> tuple[float | None, int]
 
 
 def _call_claude(prompt: str) -> str | None:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         return None
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+        response = client.chat.completions.create(
+            model="qwen/qwen-2.5-7b-instruct",
             max_tokens=100,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text.strip()
+        return response.choices[0].message.content.strip()
     except Exception as exc:
-        logger.warning("analyzer: Claude call failed: %s", exc)
+        logger.warning("analyzer: Qwen call failed: %s", exc)
         return None
 
 

@@ -29,7 +29,7 @@ import os
 import time
 
 import yfinance as yf
-import anthropic
+from openai import OpenAI
 
 from reddit_scraper.discovery import BuzzCandidate, RedditDiscovery
 
@@ -147,20 +147,23 @@ def _validate_market(ticker: str) -> dict | None:
 
 
 def _call_claude(prompt: str) -> dict | None:
-    """Call Claude and parse JSON response."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    """Call Qwen via OpenRouter and parse JSON response."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
-        logger.warning("qualifier: ANTHROPIC_API_KEY not set, skipping Claude qualification")
+        logger.warning("qualifier: OPENROUTER_API_KEY not set, skipping qualification")
         return None
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+        response = client.chat.completions.create(
+            model="qwen/qwen-2.5-72b-instruct",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text.strip()
+        text = response.choices[0].message.content.strip()
         # Strip markdown fences if present
         if text.startswith("```"):
             lines = text.split("\n")
