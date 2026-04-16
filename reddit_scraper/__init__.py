@@ -5,3 +5,9 @@ __all__ = [
     "RedditScraper", "RedditPost", "ScrapeResult",
     "TickerSentiment", "SentimentResult", "analyze_ticker", "score_posts",
 ]
+
+try:
+    from reddit_scraper.discovery import discover, DiscoveredTicker, DiscoveryResult
+    __all__ += ["discover", "DiscoveredTicker", "DiscoveryResult"]
+except ImportError:
+    pass
