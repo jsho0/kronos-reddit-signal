@@ -409,6 +409,25 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
+    if st.button("Clear bad tickers", use_container_width=True, type="secondary"):
+        try:
+            from sqlalchemy import delete as sa_delete
+            from storage.db import get_session
+            from storage.models import DiscoveredTicker
+            with get_session() as _s:
+                _s.execute(
+                    sa_delete(DiscoveredTicker).where(
+                        (DiscoveredTicker.layman_summary.is_(None))
+                        | (DiscoveredTicker.layman_summary == "")
+                        | (DiscoveredTicker.layman_summary.like("%Unable to analyze%"))
+                    )
+                )
+            st.cache_data.clear()
+            st.toast("Cleared tickers with missing analysis.", icon="🗑️")
+            st.rerun()
+        except Exception as _e:
+            st.error(f"Failed: {_e}")
+
     st.divider()
     accuracy = load_accuracy()
     if accuracy["total"] > 0:
