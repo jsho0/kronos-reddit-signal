@@ -632,6 +632,14 @@ border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin
 
         PRIORITY_ACCENT = {"HIGH": COLORS["green"], "MEDIUM": COLORS["blue"], "NEW": COLORS["amber"], "COOLING": COLORS["muted"]}
 
+        def _view_details_button(t, key_prefix: str):
+            """Render a View Details button that jumps to Tab 2 for this ticker."""
+            tkr = t.get("ticker", "")
+            if st.button("View Details →", key=f"{key_prefix}_{tkr}", use_container_width=True):
+                st.session_state.selected_ticker = tkr
+                st.session_state.jump_to_detail = True
+                st.rerun()
+
         if sort_mode == "Priority":
             # HIGH priority section
             if high:
@@ -645,6 +653,7 @@ border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin
                 for i, t in enumerate(high):
                     with cols[i % 2]:
                         st.markdown(_ticker_card(t, COLORS["green"]), unsafe_allow_html=True)
+                        _view_details_button(t, "high")
 
             building = medium + new
             if building:
@@ -660,6 +669,7 @@ border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin
                     accent = COLORS["blue"] if t.get("priority") == "MEDIUM" else COLORS["amber"]
                     with cols[i % 2]:
                         st.markdown(_ticker_card(t, accent), unsafe_allow_html=True)
+                        _view_details_button(t, "building")
 
             if cooling:
                 st.divider()
@@ -673,6 +683,7 @@ border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin
                 for i, t in enumerate(cooling):
                     with cols[i % 3]:
                         st.markdown(_ticker_card(t, COLORS["muted"]), unsafe_allow_html=True)
+                        _view_details_button(t, "cooling")
 
         else:
             # Flat sorted view
@@ -689,6 +700,7 @@ border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin
                 accent = PRIORITY_ACCENT.get(t.get("priority", ""), COLORS["muted"])
                 with cols[i % 2]:
                     st.markdown(_ticker_card(t, accent), unsafe_allow_html=True)
+                    _view_details_button(t, "flat")
 
 
 # ================================================================== #
@@ -696,6 +708,18 @@ border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin
 # ================================================================== #
 
 with tab2:
+    # If arriving via "View Details" button, inject JS to switch to this tab
+    if st.session_state.get("jump_to_detail"):
+        st.session_state.jump_to_detail = False
+        st.components.v1.html("""
+        <script>
+        setTimeout(function() {
+            var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+            if (tabs.length > 1) tabs[1].click();
+        }, 80);
+        </script>
+        """, height=0)
+
     st.header("Ticker Detail")
 
     # Build list: discovered tickers that also have signals, or fall back to all signal tickers
@@ -710,7 +734,9 @@ with tab2:
     if not all_tickers:
         st.info("No data yet. Run the pipeline: `python main.py --once`")
     else:
-        selected_ticker = st.selectbox("Select ticker", all_tickers)
+        jump_ticker = st.session_state.get("selected_ticker")
+        default_idx = all_tickers.index(jump_ticker) if jump_ticker in all_tickers else 0
+        selected_ticker = st.selectbox("Select ticker", all_tickers, index=default_idx)
         disc = disc_tickers.get(selected_ticker)
         ticker_df = df[df["ticker"] == selected_ticker].sort_values("date", ascending=False) if not df.empty else pd.DataFrame()
 
