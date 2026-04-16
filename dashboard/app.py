@@ -411,19 +411,27 @@ with st.sidebar:
 
     if st.button("Clear bad tickers", use_container_width=True, type="secondary"):
         try:
-            from sqlalchemy import delete as sa_delete
+            from sqlalchemy import delete as sa_delete, update as sa_update
             from storage.db import get_session
             from storage.models import DiscoveredTicker
             with get_session() as _s:
+                # Delete tickers with no real analysis (fallback text or empty)
                 _s.execute(
                     sa_delete(DiscoveredTicker).where(
                         (DiscoveredTicker.layman_summary.is_(None))
                         | (DiscoveredTicker.layman_summary == "")
                         | (DiscoveredTicker.layman_summary.like("%Unable to analyze%"))
+                        | (DiscoveredTicker.layman_summary.like("%getting Reddit attention with a buzz score%"))
                     )
                 )
+                # Reset consecutive_days to 1 for anything inflated above what's possible today
+                _s.execute(
+                    sa_update(DiscoveredTicker)
+                    .where(DiscoveredTicker.last_seen == DiscoveredTicker.first_seen)
+                    .values(consecutive_days=1, peak_streak=1)
+                )
             st.cache_data.clear()
-            st.toast("Cleared tickers with missing analysis.", icon="🗑️")
+            st.toast("Cleared bad tickers and reset inflated streaks.", icon="🗑️")
             st.rerun()
         except Exception as _e:
             st.error(f"Failed: {_e}")
