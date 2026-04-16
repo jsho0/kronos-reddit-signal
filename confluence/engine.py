@@ -174,7 +174,7 @@ class ConfluenceEngine:
         logger.info(
             "%s: confluence=%.3f (%s) | kronos=%.3f reddit=%.3f tech=%.3f plugins=%s",
             ticker, confluence, label, kronos_score, reddit_score, tech_score,
-            {k: f"{v:.3f}" for k, v in extra_scores},
+            {k: f"{v:.3f}" for k, v in extra_scores.items()},
         )
 
         return ConfluenceResult(
