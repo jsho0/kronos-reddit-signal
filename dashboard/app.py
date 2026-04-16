@@ -672,8 +672,8 @@ with tab2:
     disc_tickers = {t["ticker"]: t for t in discovered} if discovered else {}
     signal_tickers = sorted(df["ticker"].unique().tolist()) if not df.empty else []
     if disc_tickers:
-        # Only show tickers that are currently in the discovery watchlist
-        all_tickers = sorted(t for t in signal_tickers if t in disc_tickers) or sorted(disc_tickers.keys())
+        # Show all discovered tickers; exclude signal-only tickers not in current watchlist
+        all_tickers = sorted(set(disc_tickers.keys()) | {t for t in signal_tickers if t in disc_tickers})
     else:
         all_tickers = signal_tickers
 
