@@ -134,7 +134,7 @@ class PipelineRunner:
             except Exception as e:
                 health.tickers_failed += 1
                 health.notes.append(f"{ticker}: {e}")
-                logger.error("%s: pipeline failed: %s", ticker, e)
+                logger.error("%s: pipeline failed: %s", ticker, e, exc_info=True)
 
         health.duration_seconds = time.monotonic() - t_start
 
