@@ -514,6 +514,13 @@ with tab1:
         m4.metric("NEW this cycle", len(new))
         m5.metric("Cooling off", len(cooling))
 
+        sort_mode = st.radio(
+            "Sort by",
+            ["Priority", "Signal strength", "Buzz score", "Thesis quality"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
         st.divider()
 
         def _ticker_card(t, accent_color: str) -> str:
@@ -617,48 +624,71 @@ border-left:3px solid {accent_color};border-radius:10px;padding:14px 18px;margin
 </div>
 """
 
-        # HIGH priority section
-        if high:
-            st.markdown(
-                f'<div style="font-size:0.8rem;font-weight:700;color:{COLORS["green"]};'
-                f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">'
-                f'🔥 High Priority ({len(high)} tickers)</div>',
-                unsafe_allow_html=True,
-            )
-            cols = st.columns(2)
-            for i, t in enumerate(high):
-                with cols[i % 2]:
-                    st.markdown(_ticker_card(t, COLORS["green"]), unsafe_allow_html=True)
+        # Build latest confluence score per ticker from signals df
+        latest_confluence = {}
+        if not df.empty and "confluence_score" in df.columns:
+            for tkr, grp in df.groupby("ticker"):
+                latest_confluence[tkr] = grp.sort_values("date", ascending=False).iloc[0]["confluence_score"]
 
-        # MEDIUM + NEW (building) section
-        building = medium + new
-        if building:
-            st.divider()
-            st.markdown(
-                f'<div style="font-size:0.8rem;font-weight:700;color:{COLORS["blue"]};'
-                f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">'
-                f'📈 Building ({len(building)} tickers)</div>',
-                unsafe_allow_html=True,
-            )
+        PRIORITY_ACCENT = {"HIGH": COLORS["green"], "MEDIUM": COLORS["blue"], "NEW": COLORS["amber"], "COOLING": COLORS["muted"]}
+
+        if sort_mode == "Priority":
+            # HIGH priority section
+            if high:
+                st.markdown(
+                    f'<div style="font-size:0.8rem;font-weight:700;color:{COLORS["green"]};'
+                    f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">'
+                    f'🔥 High Priority ({len(high)} tickers)</div>',
+                    unsafe_allow_html=True,
+                )
+                cols = st.columns(2)
+                for i, t in enumerate(high):
+                    with cols[i % 2]:
+                        st.markdown(_ticker_card(t, COLORS["green"]), unsafe_allow_html=True)
+
+            building = medium + new
+            if building:
+                st.divider()
+                st.markdown(
+                    f'<div style="font-size:0.8rem;font-weight:700;color:{COLORS["blue"]};'
+                    f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">'
+                    f'📈 Building ({len(building)} tickers)</div>',
+                    unsafe_allow_html=True,
+                )
+                cols = st.columns(2)
+                for i, t in enumerate(building):
+                    accent = COLORS["blue"] if t.get("priority") == "MEDIUM" else COLORS["amber"]
+                    with cols[i % 2]:
+                        st.markdown(_ticker_card(t, accent), unsafe_allow_html=True)
+
+            if cooling:
+                st.divider()
+                st.markdown(
+                    f'<div style="font-size:0.8rem;font-weight:700;color:{COLORS["muted"]};'
+                    f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">'
+                    f'❄️ Cooling Off ({len(cooling)} tickers)</div>',
+                    unsafe_allow_html=True,
+                )
+                cols = st.columns(3)
+                for i, t in enumerate(cooling):
+                    with cols[i % 3]:
+                        st.markdown(_ticker_card(t, COLORS["muted"]), unsafe_allow_html=True)
+
+        else:
+            # Flat sorted view
+            all_active = active + cooling
+            if sort_mode == "Signal strength":
+                all_active = sorted(all_active, key=lambda t: latest_confluence.get(t.get("ticker", ""), 0), reverse=True)
+            elif sort_mode == "Buzz score":
+                all_active = sorted(all_active, key=lambda t: t.get("last_buzz_score") or 0, reverse=True)
+            elif sort_mode == "Thesis quality":
+                all_active = sorted(all_active, key=lambda t: t.get("thesis_quality") or 0, reverse=True)
+
             cols = st.columns(2)
-            for i, t in enumerate(building):
-                accent = COLORS["blue"] if t.get("priority") == "MEDIUM" else COLORS["amber"]
+            for i, t in enumerate(all_active):
+                accent = PRIORITY_ACCENT.get(t.get("priority", ""), COLORS["muted"])
                 with cols[i % 2]:
                     st.markdown(_ticker_card(t, accent), unsafe_allow_html=True)
-
-        # COOLING section
-        if cooling:
-            st.divider()
-            st.markdown(
-                f'<div style="font-size:0.8rem;font-weight:700;color:{COLORS["muted"]};'
-                f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">'
-                f'❄️ Cooling Off ({len(cooling)} tickers)</div>',
-                unsafe_allow_html=True,
-            )
-            cols = st.columns(3)
-            for i, t in enumerate(cooling):
-                with cols[i % 3]:
-                    st.markdown(_ticker_card(t, COLORS["muted"]), unsafe_allow_html=True)
 
 
 # ================================================================== #
