@@ -102,14 +102,18 @@ class DiscoveryRunner:
                         ) if k in result},
                     }
                 else:
-                    # Existing ticker seen again today
-                    new_consecutive = existing.consecutive_days + 1
+                    # Existing ticker seen again — only increment streak/total if it's a new day
+                    is_new_day = existing.last_seen != today
+                    new_consecutive = existing.consecutive_days + (1 if is_new_day else 0)
                     new_peak = max(existing.peak_streak, new_consecutive)
-                    new_total = existing.total_days_seen + 1
+                    new_total = existing.total_days_seen + (1 if is_new_day else 0)
 
-                    # Running average buzz
+                    # Running average buzz (only update if new day, else just refresh latest)
                     prev_avg = existing.avg_buzz_score or result["buzz_score"]
-                    new_avg = (prev_avg * existing.total_days_seen + result["buzz_score"]) / new_total
+                    if is_new_day and new_total > 0:
+                        new_avg = (prev_avg * existing.total_days_seen + result["buzz_score"]) / new_total
+                    else:
+                        new_avg = prev_avg
 
                     row_data = {
                         "ticker": ticker,
